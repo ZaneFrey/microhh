@@ -58,6 +58,7 @@
 #include "aerosol.h"
 #include "background_profs.h"
 #include "windfarm.h"
+#include "dragdisk.h"
 
 #ifdef USECUDA
 #include <cuda_runtime_api.h>
@@ -146,7 +147,7 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
         background= std::make_shared<Background<TF>>(master, *grid, *fields, *input);
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
-
+        dragdisk  = std::make_shared<DragDisk<TF>>(master, *grid, *fields, *input);
         windfarm  = std::make_shared<Windfarm<TF>>(master, *grid, *fields, *input);
 
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
@@ -274,7 +275,7 @@ void Model<TF>::load()
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
-
+    dragdisk->create();
     windfarm->create();
 
     microphys->create(*input, *input_nc, *stats, *cross, *dump, *column);
@@ -426,6 +427,9 @@ void Model<TF>::exec()
 
                 // Gravitational settling of binned dust types.
                 particle_bin->exec(*stats);
+
+                // Apply drag disk forcing
+                dragdisk->exec(*stats, timeloop->get_time());
 
                 // Apply turbine forcing from wind farm
                 windfarm->exec(*stats, timeloop->get_time());
@@ -602,6 +606,7 @@ void Model<TF>::prepare_gpu()
     ib       ->prepare_device();
     microphys->prepare_device();
     radiation->prepare_device();
+    dragdisk ->prepare_device();
     windfarm ->prepare_device();
     column   ->prepare_device();
     aerosol  ->prepare_device();
@@ -623,6 +628,7 @@ void Model<TF>::clear_gpu()
     ib       ->clear_device();
     microphys->clear_device();
     radiation->clear_device();
+    dragdisk ->clear_device();
     windfarm ->clear_device();
     column   ->clear_device();
     aerosol  ->clear_device();
