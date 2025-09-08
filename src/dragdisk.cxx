@@ -26,18 +26,50 @@
 #include "fields.h"
 #include "input.h"
 #include "stats.h"
+#ifdef USECUDA
+#include "cuda_buffer.h"
+template<typename TF>
+void dragdisk_apply_cuda(cuda_vector<TF>& u, const cuda_vector<int>& indices, TF cd);
+#endif
 #include <algorithm>
 #include <cmath>
+
+namespace
+{
+template<typename TF>
+void find_disk_points(const Grid<TF>& grid, TF height, int diameter,
+                      int& k_center, int& ic, int& jc, TF& radius)
+{
+    const auto& gd = grid.get_grid_data();
+
+    // Find vertical index closest to desired height
+    k_center = gd.kstart;
+    TF minz = std::abs(gd.z[gd.kstart] - height);
+    for (int k = gd.kstart + 1; k < gd.kend; ++k)
+    {
+        TF diff = std::abs(gd.z[k] - height);
+        if (diff < minz)
+        {
+            minz = diff;
+            k_center = k;
+        }
+    }
+
+    // Determine disk centre and radius
+    ic = gd.istart + (gd.iend - gd.istart) / 2;
+    jc = gd.jstart + (gd.jend - gd.jstart) / 2;
+    radius = TF(diameter) / TF(2);
+}
+} // unnamed namespace
 
 template<typename TF>
 DragDisk<TF>::DragDisk(Master& masterin, Grid<TF>& gridin, Fields<TF>& fieldsin, Input& input) :
     master(masterin), grid(gridin), fields(fieldsin)
 {
-    sizex  = input.get_item<int>("dragdisk", "sizex", "", 0);
-    sizey  = input.get_item<int>("dragdisk", "sizey", "", 0);
+    diameter = input.get_item<int>("dragdisk", "diameter", "", 0);
     height = input.get_item<TF>("dragdisk", "height", "", TF(0));
     cd     = input.get_item<TF>("dragdisk", "cd", "", TF(0.2));
-    enabled = sizex > 0 && sizey > 0;
+    enabled = diameter > 0;
     k_center = 0;
 }
 
@@ -54,35 +86,28 @@ void DragDisk<TF>::create()
 
     auto& gd = grid.get_grid_data();
 
-    // Find vertical index closest to desired height
-    k_center = gd.kstart;
-    TF minz = std::abs(gd.z[gd.kstart] - height);
-    for (int k = gd.kstart + 1; k < gd.kend; ++k)
-    {
-        TF diff = std::abs(gd.z[k] - height);
-        if (diff < minz)
-        {
-            minz = diff;
-            k_center = k;
-        }
-    }
+    int ic, jc;
+    TF radius;
+    find_disk_points(grid, height, diameter, k_center, ic, jc, radius);
 
     const int jj = gd.jstride;
     const int kk = gd.kstride;
 
-    // Determine disk bounds centred in domain
-    int ic = gd.istart + (gd.iend - gd.istart) / 2;
-    int jc = gd.jstart + (gd.jend - gd.jstart) / 2;
-
-    int istart = std::max(gd.istart, ic - sizex / 2);
-    int iend   = std::min(gd.iend,   istart + sizex);
-    int jstart = std::max(gd.jstart, jc - sizey / 2);
-    int jend   = std::min(gd.jend,   jstart + sizey);
+    const int r_int = static_cast<int>(std::ceil(radius));
+    const int istart = std::max(gd.istart, ic - r_int);
+    const int iend   = std::min(gd.iend,   ic + r_int + 1);
+    const int jstart = std::max(gd.jstart, jc - r_int);
+    const int jend   = std::min(gd.jend,   jc + r_int + 1);
 
     indices.clear();
     for (int j = jstart; j < jend; ++j)
         for (int i = istart; i < iend; ++i)
-            indices.push_back(i + j * jj + k_center * kk);
+        {
+            TF dx = std::abs(TF(i - ic)) + TF(0.5);
+            TF dy = std::abs(TF(j - jc)) + TF(0.5);
+            if (dx * dx + dy * dy <= radius * radius)
+                indices.push_back(i + j * jj + k_center * kk);
+        }
 }
 
 template<typename TF>
@@ -90,17 +115,23 @@ void DragDisk<TF>::exec(Stats<TF>&, double)
 {
     if (!enabled)
         return;
-
+#ifdef USECUDA
+    dragdisk_apply_cuda(fields.mp.at("u")->fld_g, indices_g, cd);
+#else
     auto& u = fields.mp.at("u")->fld;
     for (int idx : indices)
         u[idx] -= cd * u[idx];
+#endif
 }
 
 template<typename TF>
 void DragDisk<TF>::prepare_device()
 {
 #ifdef USECUDA
-    dummy_g.allocate(1);
+    if (!enabled)
+        return;
+    indices_g.allocate(indices.size());
+    cuda_copy(indices, indices_g);
 #endif
 }
 
@@ -108,7 +139,7 @@ template<typename TF>
 void DragDisk<TF>::clear_device()
 {
 #ifdef USECUDA
-    dummy_g.clear();
+    indices_g.free();
 #endif
 }
 

@@ -23,5 +23,32 @@
 #include "dragdisk.h"
 
 #ifdef USECUDA
-// Placeholder for future GPU implementation of drag disk forcing.
+#include "tools.h"
+
+namespace {
+template<typename TF>
+__global__ void dragdisk_kernel(TF* __restrict__ u, const int* __restrict__ idx, int n, TF cd)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t < n)
+    {
+        int g = idx[t];
+        u[g] -= cd * u[g];
+    }
+}
+}
+
+template<typename TF>
+void dragdisk_apply_cuda(cuda_vector<TF>& u, const cuda_vector<int>& indices, TF cd)
+{
+    int n = indices.size();
+    if (n == 0) return;
+    int block = 128;
+    int grid = (n + block - 1) / block;
+    dragdisk_kernel<<<grid, block>>>(u.data(), indices.data(), n, cd);
+    cuda_check_error();
+}
+
+template void dragdisk_apply_cuda<float>(cuda_vector<float>&, const cuda_vector<int>&, float);
+template void dragdisk_apply_cuda<double>(cuda_vector<double>&, const cuda_vector<int>&, double);
 #endif

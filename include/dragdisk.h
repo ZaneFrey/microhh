@@ -24,6 +24,7 @@
 #define DRAGDISK_H
 
 #include <vector>
+#include "cuda_buffer.h"
 
 class Master;
 class Input;
@@ -32,16 +33,15 @@ template<typename> class Fields;
 template<typename> class Stats;
 
 /**
- * Simple rectangular drag disk that applies a linear damping force
+ * Simple circular drag disk that applies a linear damping force
  * to the streamwise velocity inside a specified region.
  *
  * Parameters read from (case).ini:
  *
  * [dragdisk]
- * sizex   ; number of grid cells in x-direction
- * sizey   ; number of grid cells in y-direction
- * height  ; height of disk centre (m)
- * cd      ; drag coefficient (s^-1, optional, default 0.2)
+ * diameter ; disk diameter in number of grid cells
+ * height   ; height of disk centre (m)
+ * cd       ; drag coefficient (s^-1, optional, default 0.2)
  */
 
 template<typename TF>
@@ -63,8 +63,7 @@ class DragDisk
         Grid<TF>& grid;  ///< Computational grid
         Fields<TF>& fields; ///< Flow fields
 
-        int sizex;   ///< number of cells in x-direction
-        int sizey;   ///< number of cells in y-direction
+        int diameter; ///< disk diameter in grid cells
         TF height;   ///< disk centre height
         TF cd;       ///< drag coefficient
         bool enabled;///< switch for drag disk
@@ -73,8 +72,7 @@ class DragDisk
         std::vector<int> indices; ///< flattened grid indices inside disk
 
         #ifdef USECUDA
-        // Placeholder for potential GPU data
-        cuda_vector<int> dummy_g;
+        cuda_vector<int> indices_g; ///< indices of drag cells on device
         #endif
 };
 
