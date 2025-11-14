@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "dragdisk.h"
 #include "grid.h"
@@ -134,22 +135,20 @@ namespace
             const int istart, const int iend,
             const int jstart, const int jend,
             const int kstart, const int kend,
-            const int jstride, const int kstride)
+            const int jstride, const int kstride)    
     {
         const int ii = 1;
         const int jj = jstride;
         const int kk = kstride;
-
         for (int k=kstart; k<kend; ++k)
             for (int j=jstart; j<jend; ++j)
                 for (int i=istart; i<iend; ++i)
                 {
                     const int ijk = i + j*jj + k*kk;
-
                     const TF u_on_u = u[ijk] + utrans;
-                    const TF ftau = -cd * fm::abs(u_on_u);
-
-                    ut[ijk] += ftau * u_on_u;
+                    const TF ftau = -cd * std::abs(u_on_u);
+                    
+                    ut[ijk] += ftau * u_on_u;                
                 }
     }
 } 
@@ -197,8 +196,8 @@ void DragDisk<TF>::create(
 
     auto& gd = grid.get_grid_data();
 
-    find_disk_points(grid, height, diameter, k_center, xc, yc, radius);
-
+    disk_indices.clear();
+    find_disk_points(grid, height, diameter, xc, yc, k_center, i_center, j_center, radius, disk_indices);
 }
 
 #ifndef USECUDA
@@ -206,7 +205,7 @@ template<typename TF>
 void DragDisk<TF>::exec()
 {
     if (!sw_disk)
-            return;
+        return;
 
     auto& gd = grid.get_grid_data();
 
@@ -218,10 +217,10 @@ void DragDisk<TF>::exec()
         gd.utrans,
         gd.vtrans,
         cd,
-        istart, iend,
-        jstart, jend,
+        gd.istart, gd.iend,
+        gd.jstart, gd.jend,
         k_center, k_center + 1,
-        jj, kk);
+        gd.jstride, gd.kstride);
 }
 #endif
 

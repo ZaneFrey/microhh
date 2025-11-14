@@ -66,14 +66,17 @@ class DragDisk
         bool sw_diskstart;   ///< switch for drag disk start 
 
         // Drag disk settings
-        int diameter;   ///< disk diameter expressed in horizontal grid cells
+        TF diameter;   ///< disk diameter expressed in horizontal grid cells
         TF height;      ///< disk center height in meters
         TF cd;          ///< drag coefficient
         TF xc;          ///< streamwise coordinates of disk center (m)
         TF yc;          ///< horizontal coordinates of disk center (m)
         TF zc;          ///< vertical coordinate of disk center (m)
-        TF radius;      ///< disk radius (m)
+        TF radius;      ///< disk radius expressed in grid cells
         int k_center;   ///< vertical index of disk center
+        int i_center;   ///< horizontal i-index of disk center
+        int j_center;   ///< horizontal j-index of disk center
+        std::vector<int> disk_indices; ///< flattened indices of points inside disk
 
         bool has_custom_diameter = false;
         bool has_custom_height = false;

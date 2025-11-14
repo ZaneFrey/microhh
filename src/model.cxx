@@ -277,7 +277,7 @@ void Model<TF>::load()
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
-    dragdisk->create();
+    dragdisk->create(*input, *stats);
     // windfarm->create();
 
     microphys->create(*input, *input_nc, *stats, *cross, *dump, *column);
@@ -432,7 +432,7 @@ void Model<TF>::exec()
                 particle_bin->exec(*stats);
 
                 // Apply drag disk forcing
-                dragdisk->exec(*stats, timeloop->get_time());
+                dragdisk->exec();
 
                 // Apply turbine forcing from wind farm
                 // windfarm->exec(*stats, timeloop->get_time());
