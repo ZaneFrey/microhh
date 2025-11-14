@@ -112,7 +112,7 @@ class Model
 
         std::shared_ptr<Particle_bin<TF>> particle_bin;
         std::shared_ptr<DragDisk<TF>> dragdisk;
-        std::shared_ptr<Windfarm<TF>> windfarm;
+        // std::shared_ptr<Windfarm<TF>> windfarm;
 
         std::shared_ptr<Stats<TF>> stats;
         std::shared_ptr<Budget<TF>> budget;
