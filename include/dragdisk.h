@@ -24,25 +24,18 @@
 #define DRAGDISK_H
 
 #include <vector>
+#include <string>
 
 class Master;
 class Input;
+class Netcdf_handle;
 template<typename> class Grid;
 template<typename> class Fields;
+template<typename> class Field3d_operators;
+template<typename> class Field3d_io;
+template<typename> class Timedep;
 template<typename> class Stats;
-
-/**
- * Simple rectangular drag disk that applies a linear damping force
- * to the streamwise velocity inside a specified region.
- *
- * Parameters read from (case).ini:
- *
- * [dragdisk]
- * sizex   ; number of grid cells in x-direction
- * sizey   ; number of grid cells in y-direction
- * height  ; height of disk centre (m)
- * cd      ; drag coefficient (s^-1, optional, default 0.2)
- */
+template<typename> class Thermo;
 
 template<typename TF>
 class DragDisk
@@ -51,30 +44,43 @@ class DragDisk
         DragDisk(Master&, Grid<TF>&, Fields<TF>&, Input&);
         ~DragDisk();
 
-        void create();                ///< Setup drag disk indices.
-        void exec(Stats<TF>&, double);///< Apply drag forcing.
+        void init(Input&);                  ///< Initialize drag disk from input file.
+        void create(Input&, Stats<TF>&);    ///< Setup drag disk indices.
+        void exec();                        ///< Apply drag forcing.
 
-        // GPU interface (placeholders)
+        // GPU functions and variables
+        #ifdef USECUDA
         void prepare_device();
         void clear_device();
+        #endif
 
     private:
-        Master& master;  ///< Reference to master controller
-        Grid<TF>& grid;  ///< Computational grid
-        Fields<TF>& fields; ///< Flow fields
+        Master& master;     
+        Grid<TF>& grid;     
+        Fields<TF>& fields; 
+        Field3d_operators<TF> field3d_operators;
+        Field3d_io<TF> field3d_io;
 
-        int sizex;   ///< number of cells in x-direction
-        int sizey;   ///< number of cells in y-direction
-        TF height;   ///< disk centre height
-        TF cd;       ///< drag coefficient
-        bool enabled;///< switch for drag disk
+        // Internal switches
+        bool sw_disk;        ///< switch for drag disk
+        bool sw_diskstart;   ///< switch for drag disk start 
 
-        int k_center;             ///< vertical index of disk
-        std::vector<int> indices; ///< flattened grid indices inside disk
+        // Drag disk settings
+        int diameter;   ///< disk diameter expressed in horizontal grid cells
+        TF height;      ///< disk center height in meters
+        TF cd;          ///< drag coefficient
+        TF xc;          ///< streamwise coordinates of disk center (m)
+        TF yc;          ///< horizontal coordinates of disk center (m)
+        TF zc;          ///< vertical coordinate of disk center (m)
+        TF radius;      ///< disk radius (m)
+        int k_center;   ///< vertical index of disk center
+
+        bool has_custom_diameter = false;
+        bool has_custom_height = false;
+        bool has_custom_xc = false;
+        bool has_custom_yc = false;
 
         #ifdef USECUDA
-        // Placeholder for potential GPU data
-        cuda_vector<int> dummy_g;
         #endif
 };
 

@@ -30,7 +30,10 @@ class Master;
 class Input;
 template<typename> class Grid;
 template<typename> class Fields;
+template<typename> class Field3d_operators;
+template<typename> class Timedep;
 template<typename> class Stats;
+template<typename> class Field3d_io;
 
 /**
  * Simple actuator disk turbine model.
@@ -56,8 +59,9 @@ class Turbine
         Turbine(Master&, Grid<TF>&, Fields<TF>&, Input&, TF, TF, TF);
         ~Turbine();
 
-        void create();                ///< Setup turbine parameters.
-        void exec(Stats<TF>&, double);///< Apply turbine forcing.
+        void init(Input&);              ///< Initialize turbine parameters.
+        void create();                  ///< Setup turbine parameters.
+        void exec(Stats<TF>&, double);  ///< Apply turbine forcing.
 
         TF get_power() const { return power; }
 
@@ -96,7 +100,7 @@ class Turbine
 
         // GPU containers
         #ifdef USECUDA
-        cuda_vector<TF> dummy_g; ///< placeholder for future GPU data
+        
         #endif
 };
 
