@@ -52,7 +52,7 @@ template<typename> class Microphys;
 template<typename> class Radiation;
 template<typename> class Land_surface;
 template<typename> class DragDisk;
-template<typename> class Windfarm;
+// template<typename> class Windfarm;   // Will eventually enable once ready
 
 template<typename> class Decay;
 template<typename> class Limiter;

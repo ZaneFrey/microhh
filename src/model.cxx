@@ -57,7 +57,7 @@
 #include "source.h"
 #include "aerosol.h"
 #include "background_profs.h"
-#include "windfarm.h"
+// #include "windfarm.h"    // will eventually enable once ready
 #include "dragdisk.h"
 
 #ifdef USECUDA
