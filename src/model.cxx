@@ -148,7 +148,6 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
         dragdisk  = std::make_shared<DragDisk<TF>>(master, *grid, *fields, *input);
-        // windfarm  = std::make_shared<Windfarm<TF>>(master, *grid, *fields, *input);
 
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
 
@@ -208,6 +207,7 @@ void Model<TF>::init()
     decay->init(*input);
     budget->init();
     source->init();
+    dragdisk->init();
     aerosol->init();
     background->init(*input_nc);
 
@@ -276,9 +276,9 @@ void Model<TF>::load()
     source->create(*input, *input_nc);
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
-    background->create(*input, *input_nc, *stats);
     dragdisk->create(*input, *stats);
-    // windfarm->create();
+    background->create(*input, *input_nc, *stats);
+
 
     microphys->create(*input, *input_nc, *stats, *cross, *dump, *column);
 
@@ -432,10 +432,7 @@ void Model<TF>::exec()
                 particle_bin->exec(*stats);
 
                 // Apply drag disk forcing
-                dragdisk->exec();
-
-                // Apply turbine forcing from wind farm
-                // windfarm->exec(*stats, timeloop->get_time());
+                dragdisk->exec(*stats);
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);
@@ -609,9 +606,8 @@ void Model<TF>::prepare_gpu()
     ib       ->prepare_device();
     microphys->prepare_device();
     radiation->prepare_device();
-    dragdisk ->prepare_device();
-    // windfarm ->prepare_device();
     column   ->prepare_device();
+    dragdisk ->prepare_device();
     aerosol  ->prepare_device();
     // Prepare pressure last, for memory check
     pres     ->prepare_device();
@@ -631,9 +627,8 @@ void Model<TF>::clear_gpu()
     ib       ->clear_device();
     microphys->clear_device();
     radiation->clear_device();
-    dragdisk ->clear_device();
-    // windfarm ->clear_device();
     column   ->clear_device();
+    dragdisk ->clear_device();
     aerosol  ->clear_device();
 
     // Clear pressure last, for memory check

@@ -44,9 +44,9 @@ class DragDisk
         DragDisk(Master&, Grid<TF>&, Fields<TF>&, Input&);
         ~DragDisk();
 
-        void init(Input&);                  ///< Initialize drag disk from input file.
+        void init();                        ///< Initialize drag disk from input file.
         void create(Input&, Stats<TF>&);    ///< Setup drag disk indices.
-        void exec();                        ///< Apply drag forcing.
+        void exec(Stats<TF>& stats);        ///< Apply drag forcing.
 
         // GPU functions and variables
         #ifdef USECUDA
@@ -63,25 +63,19 @@ class DragDisk
 
         // Internal switches
         bool sw_disk;        ///< switch for drag disk
-        bool sw_diskstart;   ///< switch for drag disk start 
 
         // Drag disk settings
-        TF diameter;   ///< disk diameter expressed in horizontal grid cells
+        TF diameter;    ///< disk diameter (m)
         TF height;      ///< disk center height in meters
         TF cd;          ///< drag coefficient
         TF xc;          ///< streamwise coordinates of disk center (m)
         TF yc;          ///< horizontal coordinates of disk center (m)
-        TF zc;          ///< vertical coordinate of disk center (m)
-        TF radius;      ///< disk radius expressed in grid cells
         int k_center;   ///< vertical index of disk center
         int i_center;   ///< horizontal i-index of disk center
         int j_center;   ///< horizontal j-index of disk center
         std::vector<int> disk_indices; ///< flattened indices of points inside disk
 
-        bool has_custom_diameter = false;
-        bool has_custom_height = false;
-        bool has_custom_xc = false;
-        bool has_custom_yc = false;
+        const std::string tend_name = "dragdisk";
 
         #ifdef USECUDA
         #endif

@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <stdexcept>
 
 #include "dragdisk.h"
 #include "grid.h"
@@ -36,8 +37,8 @@
 
 namespace
 {
-    namespace fm = Fast_math;
-
+    // TODO: Need to add turbine index into the I/O of the find_disk_points for multiple turbine cases
+    // TODO: Need to find fractional area for points not entirely within disk extent
     template<typename TF>
     void find_disk_points(
         const Grid<TF>& grid,
@@ -45,112 +46,169 @@ namespace
         TF diameter,
         TF xc,
         TF yc,
-        int& k_center,
         int& i_center,
-        int& j_center,
-        TF& radius_cells,
-        std::vector<int>& indices_out)
+        std::vector<int>& disk_indices)
     {
         const auto& gd = grid.get_grid_data();
-        const int jj = gd.jstride;
-        const int kk = gd.kstride;
 
-        // Snap the requested height to the nearest full level
-        auto nearest_k = [&](TF target_z) {
-            int k_best = gd.kstart;
-            TF best = std::abs(gd.z[k_best] - target_z);
-            for (int k = gd.kstart + 1; k < gd.kend; ++k)
+        // Ensure the disk lies inside the physical domain.
+        const TF radius = TF(0.5) * diameter;
+        if (yc - radius < TF(0) || yc + radius > gd.ysize ||
+            height - radius < TF(0) || height + radius > gd.zsize)
+        {
+            throw std::runtime_error("DragDisk: disk boundaries lie outside the global domain");
+        }
+
+        // Find the disk center height index.
+        int    k_center = gd.kstart;
+        TF     k_best   = std::abs(gd.z[k_center] - height);
+        for (int k = gd.kstart + 1; k < gd.kend; ++k)
+        {
+            const TF diff = std::abs(gd.z[k] - height);
+            if (diff < k_best)
             {
-                TF diff = std::abs(gd.z[k] - target_z);
-                if (diff < best)
-                {
-                    best = diff;
-                    k_best = k;
-                }
+                k_best   = diff;
+                k_center = k;
             }
-            return k_best;
-        };
-        k_center = nearest_k(height);
+        }
 
-        // Locate the closest i/j centers
+        // Convert the disk center coordinate (x [m], y[m]) to local grid indices.
         const TF x0 = gd.x[gd.istart];
         const TF y0 = gd.y[gd.jstart];
-        const TF inv_dx = TF(1) / gd.dx;
-        const TF inv_dy = TF(1) / gd.dy;
 
-        auto clamp_index = [](int val, int low, int high_exclusive)
+        const TF fi = (xc - x0) * gd.dxi;
+        const TF fj = (yc - y0) * gd.dyi;
+
+        int i_cand = gd.istart + static_cast<int>(std::floor(fi + TF(0.5)));
+        int j_center = gd.jstart + static_cast<int>(std::floor(fj + TF(0.5)));
+
+        i_cand   = std::max(gd.istart, std::min(gd.iend - 1, i_cand));
+        j_center = std::max(gd.jstart, std::min(gd.jend - 1, j_center));
+
+        // Check whether this rank actually owns the x-location of the disk.
+        const TF x_center = gd.x[i_cand];
+        if (std::abs(x_center - xc) > TF(0.5) * gd.dx)
         {
-            if (val < low)
-                return low;
-            if (val >= high_exclusive)
-                return high_exclusive - 1;
-            return val;
-        };
+            disk_indices.clear();
+            return;
+        }
+        i_center = i_cand;
 
-        const TF offset_i = (xc - x0) * inv_dx;
-        const TF offset_j = (yc - y0) * inv_dy;
+        // Compute disk extent in indices (used only as a bounding box).
+        const TF dy = gd.dy;
 
-        i_center = clamp_index(
-                gd.istart + static_cast<int>(std::lround(offset_i)),
-                gd.istart, gd.iend);
-        j_center = clamp_index(
-                gd.jstart + static_cast<int>(std::lround(offset_j)),
-                gd.jstart, gd.jend);
+        int j_extent = static_cast<int>(std::ceil(radius * gd.dyi));
 
-        // Convert physical diameter to a radius in index space
-        const TF spacing = TF(0.5) * diameter / std::sqrt(gd.dx * gd.dy);
-        radius_cells = TF(0.5) * diameter / spacing;
+        TF dz_center;
+        if (k_center > gd.kstart && k_center < gd.kend - 1)
+            dz_center = TF(0.5) * (gd.z[k_center + 1] - gd.z[k_center - 1]); // interior cell
+        else if (k_center < gd.kend - 1)
+            dz_center = gd.z[k_center + 1] - gd.z[k_center]; // bottom edge case
+        else
+            dz_center = gd.z[k_center] - gd.z[k_center - 1]; // top edge case
 
-        // Scan the bounding box around the disk and keep points inside the circle
-        const int r_int  = static_cast<int>(std::ceil(radius_cells));
-        const int istart = std::max(gd.istart, i_center - r_int);
-        const int iend   = std::min(gd.iend,   i_center + r_int + 1);
-        const int jstart = std::max(gd.jstart, j_center - r_int);
-        const int jend   = std::min(gd.jend,   j_center + r_int + 1);
+        int k_extent = static_cast<int>(std::ceil(radius / dz_center));
 
-        indices_out.clear();
-        for (int j = jstart; j < jend; ++j)
-            for (int i = istart; i < iend; ++i)
+        const int j_min = j_center - j_extent;
+        const int j_max = j_center + j_extent;
+        const int k_min = k_center - k_extent;
+        const int k_max = k_center + k_extent;
+
+        // Intersect the disk bounding box with the local sub-domain.
+        const int j_lo = std::max(j_min, gd.jstart);        // CHECK THIS
+        const int j_hi = std::min(j_max, gd.jend - 1);      // CHECK THIS for MPI issue
+        const int k_lo = std::max(k_min, gd.kstart);
+        const int k_hi = std::min(k_max, gd.kend - 1);
+
+        disk_indices.clear();
+
+        if (j_lo > j_hi || k_lo > k_hi)
+            return; // Disk does not intersect this rank in y-z.
+
+        // Extract disk indices on y-z plane that fall entirely within the diameter.
+        // Indices are flattened as j * jstride + k * kstride so they can be reused in dragdisk_u.
+        const TF cell_diag = std::sqrt(dy * dy + dz_center * dz_center);
+        const TF eff_radius = std::max(TF(0), radius - TF(0.5) * cell_diag);
+        const TF eff_radius2 = eff_radius * eff_radius;
+
+        const int ny = j_hi - j_lo + 1;
+        const int nz = k_hi - k_lo + 1;
+        disk_indices.reserve(ny * nz);
+
+        const int jstride = gd.jstride;
+        const int kstride = gd.kstride;
+
+        for (int k = k_lo; k <= k_hi; ++k)
+        {
+            const TF dz = TF(k - k_center) * dz_center;
+            const TF dz2 = dz * dz;
+
+            for (int j = j_lo; j <= j_hi; ++j)
             {
-                const TF di = TF(i - i_center);
-                const TF dj = TF(j - j_center);
-                if (di * di + dj * dj <= radius_cells * radius_cells)
+                const TF dy_off = TF(j - j_center) * dy;
+                const TF dist2 = dy_off * dy_off + dz2;
+
+                if (dist2 <= eff_radius2)
                 {
-                    int idx = i + j * jj + k_center * kk;
-                    indices_out.push_back(idx);
+                    const int index = j * jstride + k * kstride;
+                    disk_indices.push_back(index);
                 }
             }
-
+        }
     }
 
     template<typename TF>
     void dragdisk_u(
             TF* const restrict ut,
             const TF* const restrict u,
-            const TF* const restrict v,
-            const TF* const restrict w,
             const TF utrans,
-            const TF vtrans,
             const TF cd,
-            const int istart, const int iend,
-            const int jstart, const int jend,
-            const int kstart, const int kend,
-            const int jstride, const int kstride)    
+            const int i_center,
+            const std::vector<int>& disk_indices)
     {
-        const int ii = 1;
-        const int jj = jstride;
-        const int kk = kstride;
-        for (int k=kstart; k<kend; ++k)
-            for (int j=jstart; j<jend; ++j)
-                for (int i=istart; i<iend; ++i)
-                {
-                    const int ijk = i + j*jj + k*kk;
-                    const TF u_on_u = u[ijk] + utrans;
-                    const TF ftau = -cd * std::abs(u_on_u);
-                    
-                    ut[ijk] += ftau * u_on_u;                
-                }
+        for (const int offset : disk_indices)
+        {
+            const int ijk = i_center + offset;
+
+            const TF u_on_u = u[ijk] + utrans;
+            const TF ftau   = -cd * std::abs(u_on_u);
+
+            ut[ijk] += ftau * u_on_u;
+        }
     }
+
+    // TODO: implement disk_avg_velocity:
+    // - must be called after initializing disk points, but before force computation
+    // Sample velocities at turbine indices 
+    // take weighted (use weighted when area fraction on disk is used) average of velocities at point
+
+    // TODO: implement compute_disk_forces:
+    /* Computes the axial (thrust) and tangential (rotational) forces on disk
+    *
+    *   Inputs:
+    *   turbine index, disk indices (flattened), disk velocities
+    * 
+    *   Compute axial thrust force:
+    *   -> 0.5 * Ct * U^2 * A_{disk-or-cell}/dx
+    * 
+    *   Compute radial tangential force:
+    *   -> 0.5 * Cp * U^2 * (U/(omega*r)) * cos(theta) * A_{disk-or-cell}/dx
+    *   -> 0.5 * Cp * U^2 * (U/(omega*r)) * sin(theta) * A_{disk-or-cell}/dx
+    * 
+    */
+
+    // TODO: implement compute_disk_power
+    /* Computes the power at the rotor disk
+    *
+    *   -> reference lines 730-752 of windfarm_module_v1.f90 in Fabien's code
+    */
+
+    // TODO: implement compute_disk_torque
+    /* Computes the torque at the rotor disk
+    *
+    *   -> reference lines 730-752 of windfarm_module_v1.f90 in Fabien's code
+    * 
+    */
 } 
 
 template<typename TF>
@@ -163,9 +221,9 @@ DragDisk<TF>::DragDisk(
 
     if (sw_disk)
     {
-        diameter = input.get_item<int>("dragdisk", "diameter", "", TF(100));
+        diameter = input.get_item<TF>("dragdisk", "diameter", "", TF(100));
         height   = input.get_item<TF>("dragdisk", "height", "", TF(100));
-        cd       = input.get_item<TF>("dragdisk", "cd", "");
+        cd       = input.get_item<TF>("dragdisk", "cd", "", TF(0.5));
         xc       = input.get_item<TF>("dragdisk", "xc", "", TF(100));
         yc       = input.get_item<TF>("dragdisk", "yc", "", TF(100));
     }
@@ -177,8 +235,7 @@ DragDisk<TF>::~DragDisk()
 }
 
 template <typename TF>
-void DragDisk<TF>::init(
-        Input& inputin)
+void DragDisk<TF>::init()
 {
     if (!sw_disk)
         return;
@@ -194,33 +251,36 @@ void DragDisk<TF>::create(
     if (!sw_disk)
         return;
 
-    auto& gd = grid.get_grid_data();
+    // TODO: Add loop through the number of turbines, then call find_disk_points at each turbine
+    // location and assign each set of turbine location indices to a specific turbine index
 
-    disk_indices.clear();
-    find_disk_points(grid, height, diameter, xc, yc, k_center, i_center, j_center, radius, disk_indices);
+    find_disk_points(grid, height, diameter, xc, yc, i_center, disk_indices);
 }
 
 #ifndef USECUDA
 template<typename TF>
-void DragDisk<TF>::exec()
+void DragDisk<TF>::exec(Stats<TF>& stats)
 {
     if (!sw_disk)
         return;
 
+    if (disk_indices.empty())
+        return;
+
     auto& gd = grid.get_grid_data();
 
+    // TODO: Call actuator disk function that gets mean velocity at the disk itself, use to calculate the velocity used in thrust force
+    // Include the wake rotation (tangential force) in the actuator disk
+
     dragdisk_u<TF>(
-        fields.mt.at("u")->fld.data(),
-        fields.mp.at("u")->fld.data(),
-        fields.mp.at("v")->fld.data(),
-        fields.mp.at("w")->fld.data(),
+        fields.mt.at("u")->fld.data(),  // ut: u-tendency array
+        fields.mp.at("u")->fld.data(),  // u:  prognostic u field
         gd.utrans,
-        gd.vtrans,
         cd,
-        gd.istart, gd.iend,
-        gd.jstart, gd.jend,
-        k_center, k_center + 1,
-        gd.jstride, gd.kstride);
+        i_center,    
+        disk_indices);
+
+    stats.calc_tend(*fields.mt.at("u"), tend_name);
 }
 #endif
 
