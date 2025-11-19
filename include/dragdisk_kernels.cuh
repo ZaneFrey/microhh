@@ -42,15 +42,18 @@ namespace DragDisk_kernels
                 const TF* const __restrict__ u,
                 const TF utrans,
                 const TF cd,
-                const int i_center,
-                const int j_center,
-                const TF radius_cells_sq)
+                const TF* const __restrict__ y,
+                const TF* const __restrict__ z,
+                const TF yc,
+                const TF height,
+                const TF eff_radius2)
         {
             (void)level;
 
-            const TF di = TF(i - i_center);
-            const TF dj = TF(j - j_center);
-            if (di * di + dj * dj > radius_cells_sq)
+            const TF dy = y[j] - yc;
+            const TF dz = z[k] - height;
+            const TF dist2 = dy * dy + dz * dz;
+            if (dist2 > eff_radius2)
                 return;
 
             const int ijk = g(i, j, k);

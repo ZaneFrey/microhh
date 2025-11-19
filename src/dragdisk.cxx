@@ -59,6 +59,20 @@ namespace
             throw std::runtime_error("DragDisk: disk boundaries lie outside the global domain");
         }
 
+        // Quick y-direction ownership check: if the disk (including its radius)
+        // does not intersect this rank's y-interval, skip it on this rank.
+        const TF dy = gd.dy;
+        const TF y_min_center = gd.y[gd.jstart];
+        const TF y_max_center = gd.y[gd.jend - 1];
+        const TF y_min_edge   = y_min_center - TF(0.5) * dy;
+        const TF y_max_edge   = y_max_center + TF(0.5) * dy;
+
+        if (yc + radius < y_min_edge || yc - radius > y_max_edge)
+        {
+            disk_indices.clear();
+            return;
+        }
+
         // Find the disk center height index.
         int    k_center = gd.kstart;
         TF     k_best   = std::abs(gd.z[k_center] - height);
@@ -95,7 +109,6 @@ namespace
         i_center = i_cand;
 
         // Compute disk extent in indices (used only as a bounding box).
-        const TF dy = gd.dy;
 
         int j_extent = static_cast<int>(std::ceil(radius * gd.dyi));
 
@@ -140,13 +153,13 @@ namespace
 
         for (int k = k_lo; k <= k_hi; ++k)
         {
-            const TF dz = TF(k - k_center) * dz_center;
+            const TF dz  = gd.z[k] - height;
             const TF dz2 = dz * dz;
 
             for (int j = j_lo; j <= j_hi; ++j)
             {
-                const TF dy_off = TF(j - j_center) * dy;
-                const TF dist2 = dy_off * dy_off + dz2;
+                const TF dy_off = gd.y[j] - yc;
+                const TF dist2  = dy_off * dy_off + dz2;
 
                 if (dist2 <= eff_radius2)
                 {
