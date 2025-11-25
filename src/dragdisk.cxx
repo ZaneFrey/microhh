@@ -37,8 +37,6 @@
 
 namespace
 {
-    // TODO: Need to add turbine index into the I/O of the find_disk_points for multiple turbine cases
-    // TODO: Need to find fractional area for points not entirely within disk extent
     template<typename TF>
     void find_disk_points(
         const Grid<TF>& grid,
@@ -109,7 +107,6 @@ namespace
         i_center = i_cand;
 
         // Compute disk extent in indices (used only as a bounding box).
-
         int j_extent = static_cast<int>(std::ceil(radius * gd.dyi));
 
         TF dz_center;
@@ -128,8 +125,8 @@ namespace
         const int k_max = k_center + k_extent;
 
         // Intersect the disk bounding box with the local sub-domain.
-        const int j_lo = std::max(j_min, gd.jstart);        // CHECK THIS
-        const int j_hi = std::min(j_max, gd.jend - 1);      // CHECK THIS for MPI issue
+        const int j_lo = std::max(j_min, gd.jstart);
+        const int j_hi = std::min(j_max, gd.jend - 1);
         const int k_lo = std::max(k_min, gd.kstart);
         const int k_hi = std::min(k_max, gd.kend - 1);
 
@@ -146,7 +143,7 @@ namespace
 
         const int ny = j_hi - j_lo + 1;
         const int nz = k_hi - k_lo + 1;
-        disk_indices.reserve(ny * nz);
+        disk_indices.reserve(ny * nz); 
 
         const int jstride = gd.jstride;
         const int kstride = gd.kstride;
@@ -189,39 +186,6 @@ namespace
             ut[ijk] += ftau * u_on_u;
         }
     }
-
-    // TODO: implement disk_avg_velocity:
-    // - must be called after initializing disk points, but before force computation
-    // Sample velocities at turbine indices 
-    // take weighted (use weighted when area fraction on disk is used) average of velocities at point
-
-    // TODO: implement compute_disk_forces:
-    /* Computes the axial (thrust) and tangential (rotational) forces on disk
-    *
-    *   Inputs:
-    *   turbine index, disk indices (flattened), disk velocities
-    * 
-    *   Compute axial thrust force:
-    *   -> 0.5 * Ct * U^2 * A_{disk-or-cell}/dx
-    * 
-    *   Compute radial tangential force:
-    *   -> 0.5 * Cp * U^2 * (U/(omega*r)) * cos(theta) * A_{disk-or-cell}/dx
-    *   -> 0.5 * Cp * U^2 * (U/(omega*r)) * sin(theta) * A_{disk-or-cell}/dx
-    * 
-    */
-
-    // TODO: implement compute_disk_power
-    /* Computes the power at the rotor disk
-    *
-    *   -> reference lines 730-752 of windfarm_module_v1.f90 in Fabien's code
-    */
-
-    // TODO: implement compute_disk_torque
-    /* Computes the torque at the rotor disk
-    *
-    *   -> reference lines 730-752 of windfarm_module_v1.f90 in Fabien's code
-    * 
-    */
 } 
 
 template<typename TF>
@@ -264,9 +228,6 @@ void DragDisk<TF>::create(
     if (!sw_disk)
         return;
 
-    // TODO: Add loop through the number of turbines, then call find_disk_points at each turbine
-    // location and assign each set of turbine location indices to a specific turbine index
-
     find_disk_points(grid, height, diameter, xc, yc, i_center, disk_indices);
 }
 
@@ -281,9 +242,6 @@ void DragDisk<TF>::exec(Stats<TF>& stats)
         return;
 
     auto& gd = grid.get_grid_data();
-
-    // TODO: Call actuator disk function that gets mean velocity at the disk itself, use to calculate the velocity used in thrust force
-    // Include the wake rotation (tangential force) in the actuator disk
 
     dragdisk_u<TF>(
         fields.mt.at("u")->fld.data(),  // ut: u-tendency array
