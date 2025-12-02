@@ -40,7 +40,6 @@ namespace
     template<typename TF>
     void find_disk_points(
         const Grid<TF>& grid,
-        int turbine_idx,
         TF height,
         TF diameter,
         TF xc,
@@ -134,6 +133,8 @@ namespace
         const int k_hi = std::min(k_max, gd.kend - 1);
 
         disk_indices.clear();
+        radial_dist.clear();
+        angle.clear();
 
         if (j_lo > j_hi || k_lo > k_hi)
             return; // Disk does not intersect this rank in y-z.
@@ -146,7 +147,10 @@ namespace
 
         const int ny = j_hi - j_lo + 1;
         const int nz = k_hi - k_lo + 1;
-        disk_indices.reserve(ny * nz); 
+        const int nmax = ny * nz;
+        disk_indices.reserve(nmax);
+        radial_dist.reserve(nmax);
+        angle.reserve(nmax);
 
         const int jstride = gd.jstride;
         const int kstride = gd.kstride;
@@ -165,46 +169,33 @@ namespace
                 {
                     const int index = j * jstride + k * kstride;
                     disk_indices.push_back(index);
+
+                    // Radial distance and azimuthal angle for each point in the disk region
+                    const TF r   = std::sqrt(dist2);
+                    const TF phi = std::atan2(dz, dy_off) + TF(M_PI_2);
+
+                    radial_dist.push_back(r);
+                    angle.push_back(phi);
                 }
             }
         }
-
-        // Calculate radial distance and azimuthal angle for use in disk forcing later
-        for (const int offset : disk_indices)
-        {
-            const int ijk = i_center + offset;
-            const int k_idx = offset / kstride;
-            const int j_idx = (offset - k_idx * kstride) / jstride;
-            const TF offset_y_cells = (gd.y[j_idx] - yc) * gd.dyi;
-            const TF offset_z_cells = (gd.z[k_idx] - height) / dz_center;
-            const int offset_y = static_cast<int>(std::round(offset_y_cells));
-            const int offset_z = static_cast<int>(std::round(offset_z_cells));
-            
-            // Radial distance of every point in disk region from the hub center
-            const TF radial_dist[ijk] = std::sqrt(std::pow(offset_y * gd.dy,2) + std::pow(offset_z * gd.dz,2));
-
-            // Azimuthal angle on tangential direction of every point from hub center
-            const TF angle[ijk] = std::atan2(offset_z * gd.dz, offset_y * gd.dy) + TF(M_PI_2);
-        }
-    
     }
 
     template<typename TF>
     void calc_disk_velocity(
-        const int turbine_idx,
         const TF* const restrict u,
         const TF utrans,
         const TF diameter,
         const TF tsr,
-        const int i_center
+        const int i_center,
         const std::vector<int>& disk_indices,
-        const std::vector<TF>& disk_vel,
-        const std::vector<TF>& omega)
+        TF& disk_vel,
+        TF& omega)
     {
         if (disk_indices.empty())
         {
-            disk_vel[turbine_idx] = TF(0);
-            omega[turbine_idx]    = TF(0);
+            disk_vel = TF(0);
+            omega    = TF(0);
             return;
         }
         
@@ -216,85 +207,96 @@ namespace
             sum += u[ijk] + utrans;
         }
 
-        disk_vel[turbine_idx] = sum / static_cast<TF>(disk_indices.size());     // disk-average streamwise velocity
-        omega[turbine_idx] = tsr * disk_vel[turbine_idx] / (diameter / 2);      // angular velocity
+        disk_vel = sum / static_cast<TF>(disk_indices.size());  // disk-average streamwise velocity
+        omega    = tsr * disk_vel / (diameter / 2);             // angular velocity
     }
 
    template<typename TF>
    void calc_disk_forces(
-        const int turbine_idx,
         TF* const restrict ut, TF* const restrict vt, TF* const restrict wt,
         const TF* const restrict u, const TF utrans,
         const TF cp, const TF ct,
-        const TF area_cell,
+        const TF dx,
         const std::vector<int>& disk_indices,
-        const std::vector<TF>& disk_vel, const std::vector<TF>& omega,
-        const std::vector<TF>& angle, const std::vector<TF>& radial_dist,
+        const TF disk_vel, const TF omega,
+        const std::vector<TF>& angle,
+        const std::vector<TF>& radial_dist,
         const int i_center, const int jstride, const int kstride)
     {
         const int ii = 1;
         const int jj = jstride;
         const int kk = kstride;
 
-        for (const int offset : disk_indices)
+        // low omega check
+        if (disk_vel == 0)
         {
-            const int ijk = i_center + offset;
-
-            // Axial (thrust) forcing
-            const TF ftx = -TF(0.5) * ct * (disk_vel[turbine_idx] * disk_vel[turbine_idx]) * area_cell;
-
-            ut[ijk] += ftx;
-
-            // Wake swirl (tangential) forcing projected onto staggered v and w grids.
-            if (radial_dist[ijk] != TF(0))
+            TF ftx = TF(0);
+            TF fty = TF(0);
+            TF ftz = TF(0);
+        }
+        else
+        {
+            for (std::size_t p = 0; p < disk_indices.size(); ++p)
             {
-                const TF fty = -TF(0.5) * cp * (disk_vel[turbine_idx] * disk_vel[turbine_idx]) * (u[ijk] + utrans) / 
-                                (omega[turbine_idx] * radial_dist[ijk]) * std::cos(angle[ijk]) * area_cell;
-                const TF ftz = -TF(0.5) * cp * (disk_vel[turbine_idx] * disk_vel[turbine_idx]) * (u[ijk] + utrans) / 
-                                (omega[turbine_idx] * radial_dist[ijk]) * std::sin(angle[ijk]) * area_cell;
+                const int offset = disk_indices[p];
+                const int ijk = i_center + offset;
+                const TF r = radial_dist[p];
+                const TF phi = angle[p];
 
-                // Spread tangential forces to v, w tendencies
-                const TF fty_share = fty * TF(0.25);
-                vt[ijk]           += fty_share;
-                vt[ijk - ii]      += fty_share;
-                vt[ijk - ii + jj] += fty_share;
-                vt[ijk + jj]      += fty_share;
+                // Axial (thrust) forcing
+                const TF ftx = -TF(0.5) * ct * (disk_vel * disk_vel) / dx;
 
-                const TF ftz_share = ftz * TF(0.25);
-                wt[ijk]           += ftz_share;
-                wt[ijk - ii]      += ftz_share;
-                wt[ijk - ii + kk] += ftz_share;
-                wt[ijk + kk]      += ftz_share;
-            }    
+                ut[ijk] += ftx;
+
+                // Wake swirl (tangential) forcing projected onto staggered v and w grids.
+                if (r != TF(0))
+                {
+                    const TF fty = -TF(0.5) * cp * (disk_vel * disk_vel) * (u[ijk] + utrans) / 
+                                    (omega * r) * std::cos(phi) / dx;
+                    const TF ftz = -TF(0.5) * cp * (disk_vel * disk_vel) * (u[ijk] + utrans) / 
+                                    (omega * r) * std::sin(phi) / dx;
+
+                    // Spread tangential forces to v, w tendencies
+                    const TF fty_share = fty * TF(0.25);
+                    vt[ijk]           += fty_share;
+                    vt[ijk - ii]      += fty_share;
+                    vt[ijk - ii + jj] += fty_share;
+                    vt[ijk + jj]      += fty_share;
+
+                    const TF ftz_share = ftz * TF(0.25);
+                    wt[ijk]           += ftz_share;
+                    wt[ijk - ii]      += ftz_share;
+                    wt[ijk - ii + kk] += ftz_share;
+                    wt[ijk + kk]      += ftz_share;
+                }    
+            }
         }
     }
 
     template<typename TF>
     void calc_disk_power_torque(
-        const int turbine_idx,
         const TF* const restrict u, const TF utrans,
         const TF cp,
         const TF area_cell,
         const int i_center,
         const std::vector<int>& disk_indices,
-        const std::vector<TF>& disk_vel, const std::vector<TF>& omega,
-        std::vector<TF>& power, std::vector<TF>& torque)
+        const TF disk_vel, const TF omega,
+        TF& power, TF& torque)
     {
-        power[turbine_idx]  = TF(0);
-        torque[turbine_idx] = TF(0);
+        power  = TF(0);
+        torque = TF(0);
 
         for (const int offset : disk_indices)
         {
             const int ijk = i_center + offset;
 
             // Calculate the turbine power
-            const TF pt = TF(0.5) * cp * (u[ijk] + utrans) *
-                        (disk_vel[turbine_idx] * disk_vel[turbine_idx]) * area_cell;
-            power[turbine_idx] = power[turbine_idx] + pt;
+            const TF pt = TF(0.5) * cp * (u[ijk] + utrans) * (disk_vel * disk_vel) * area_cell;
+            power = power + pt;
             
             // Calculate the turbine torque
-                const TF tt = pt / omega[turbine_idx];
-                torque[turbine_idx] = torque[turbine_idx] + tt;
+                const TF tt = pt / omega;
+                torque = torque + tt;
         }
     }
 
@@ -303,28 +305,57 @@ namespace
     *
     *   ->  Towers are represented with TAD (tower area density, analogous to PAD),
     *       with units of m^2/m^3 (frontal area/cell volume)
-    *   ->  Tower diameter tapers with height, will result in decreasing TAD
     *   ->  Uses Cd from tabulated data of flow across cylinders, Cd~0.5 for Re_D~1e6
-    *   ->  Takes turbine disk center from find_disk_points
+    *   ->  Takes turbine disk center from find_disk_points and extends downward to bottom index
+    * 
     */
-    template<typename TF>
-    void tower_nacelle_drag(
-            TF* const restrict ut,
-            TF* const restrict vt,
-            TF* const restrict vw,
-            const TF* const restrict u,
-            const TF* const restrict v,
-            const TF* const restrict w,
-            const TF* const restrict tad,
-            const TF utrans,
-            const TF vtrans,
-            const TF tower_diameter,
-            const TF height,
-            const TF cd,
-            const int i_center,
-            const int j_center,
-            const int k_center)
-    {}
+    // template<typename TF>
+    // void tower_nacelle_drag(
+    //         TF* const restrict ut,
+    //         TF* const restrict vt,
+    //         TF* const restrict vw,
+    //         const TF* const restrict u,
+    //         const TF* const restrict v,
+    //         const TF* const restrict w,
+    //         const TF* const restrict tad,
+    //         const TF utrans,
+    //         const TF vtrans,
+    //         const TF tower_diameter,
+    //         const TF height,
+    //         const TF cd,
+    //         const int i_center)
+    // {
+    //     // need to take the disk xc, yc, and height indices
+      
+    //     // Take index of hub height 
+
+    //     // Loop through k=0 to k=k_hub
+
+    //     for (k = 0; k < k_hub; ++k)
+    //     {
+    //         // Compute TAD from diameter and cell volume
+    //         TF tad = (diameter * dz) / (dx * dy * (z[k+1] - z[k]));
+            
+    //         const TF ftowy_share = ftowx * TF(0.25);
+    //         ut[ijk]           += ftowx_share;
+    //         ut[ijk - ii]      += ftowx_share;
+    //         ut[ijk - ii + jj] += ftowx_share;
+    //         ut[ijk + jj]      += ftowx_share;
+           
+    //         const TF ftowy_share = ftowy * TF(0.25);
+    //         vt[ijk]           += ftowy_share;
+    //         vt[ijk - ii]      += ftowy_share;
+    //         vt[ijk - ii + jj] += ftowy_share;
+    //         vt[ijk + jj]      += ftowy_share;
+
+    //         const TF ftowx = -cd * tad * std::sqrt((u_on_u * u_on_u) + (v_on_u * v_on_u));
+    //         const TF ftowy = -cd * tad * std::sqrt((u_on_v * u_on_v) + (v_on_v * v_on_v));
+
+    //         ut[ijk] += ftowx * u_on_u;
+    //         vt[ijk] += ftowy * v_on_v;
+
+    //     }
+    // }
 } 
 
 template<typename TF>
@@ -333,33 +364,46 @@ Turbine<TF>::Turbine(
         master(masterin), grid(gridin), fields(fieldsin), 
         field3d_operators(masterin, gridin, fieldsin), field3d_io(masterin, gridin)
 {
+    // turbine representation modes
     sw_adm      = input.get_item<bool>("turbine", "swadm", "", false);
-    sw_windfarm = input.get_item<bool>("turbine", "swwindfarm", "", false);
+    sw_tower    = input.get_item<bool>("turbine", "swtower", "", false);
 
     if (sw_adm)
     {
-        if (sw_windfarm)
-        {
-            diameter = input.get_item<TF>("turbine", "diameter", "", TF(100));
-            height   = input.get_item<TF>("turbine", "height",   "", TF(100));
-            cp       = input.get_item<TF>("turbine", "cp",       "", TF(0.45));
-            ct       = input.get_item<TF>("turbine", "ct",       "", TF(1.333));
-            tsr      = input.get_item<TF>("turbine", "tsr",      "", TF(8));
-            // TODO: add read from list to get xc and yc locations from list for multiple turbines
-        }
-        else
-        {
-            turbine_idx = 1;
-            diameter = input.get_item<TF>("turbine", "diameter", "", TF(100));
-            height   = input.get_item<TF>("turbine", "height",   "", TF(100));
-            cp       = input.get_item<TF>("turbine", "cp",       "", TF(0.45));
-            ct       = input.get_item<TF>("turbine", "ct",       "", TF(1.333));
-            tsr      = input.get_item<TF>("turbine", "tsr",      "", TF(8));
-            xc       = input.get_item<TF>("turbine", "xc",       "", TF(100));
-            yc       = input.get_item<TF>("turbine", "yc",       "", TF(100));
-        }
+        diameter = input.get_item<TF>("turbine", "diameter", "", TF(100));
+        height   = input.get_item<TF>("turbine", "height",   "", TF(100));
+        cp       = input.get_item<TF>("turbine", "cp",       "", TF(0.45));
+        ct       = input.get_item<TF>("turbine", "ct",       "", TF(1.333));
+        tsr      = input.get_item<TF>("turbine", "tsr",      "", TF(8));
+        xc       = input.get_list<TF>("turbine", "xc", "", std::vector<TF>());
+        yc       = input.get_list<TF>("turbine", "yc", "", std::vector<TF>());
+
+        if (xc.empty())
+            throw std::runtime_error("Turbine: [turbine][xc] list must not be empty");
+
+        if (xc.size() != yc.size())
+            throw std::runtime_error("Turbine: [turbine][xc] and [turbine][yc] lists must have the same length");
+
+        nturbine = static_cast<int>(xc.size());
+    
+        turbine_starttime = input.get_item<TF>("turbine","admstarttime","",TF(0));
+
+        // allocate per‑turbine storage
+        i_center.resize(nturbine);
+        disk_indices.resize(nturbine);
+        radial_dist.resize(nturbine);
+        angle.resize(nturbine);
+        disk_vel.resize(nturbine);
+        omega.resize(nturbine);
+        power.resize(nturbine);
+        torque.resize(nturbine);
     }
 
+    if (sw_tower)
+    {
+        tower_diameter = input.get_item<TF>("turbine", "towerdiam", "", TF(10));
+        cd             = input.get_item<TF>("turbine", "cd",        "", TF(0.5));
+    }
 }
 
 template<typename TF>
@@ -384,20 +428,19 @@ void Turbine<TF>::create(
     if (!sw_adm)
         return;
 
-    // TODO: Add loop through the number of turbines, then call find_disk_points at each turbine
-    // location and assign each set of turbine location indices to a specific turbine index
-
-    find_disk_points(
-        grid,
-        turbine_idx,
-        height,
-        diameter,
-        xc,
-        yc,
-        i_center,
-        disk_indices,
-        radial_dist,
-        angle);
+    for (int it = 0; it < nturbine; ++it)
+    {
+        find_disk_points(
+            grid,
+            height,
+            diameter,
+            xc[it],
+            yc[it],
+            i_center[it],
+            disk_indices[it],
+            radial_dist[it],
+            angle[it]);
+    }
 }
 
 #ifndef USECUDA
@@ -413,49 +456,61 @@ void Turbine<TF>::exec(Stats<TF>& stats)
     auto& gd = grid.get_grid_data();
 
     // Calculate disk area and equivalent cell areas
-    const TF area_disk          = TF(M_PI) * diameter * diameter / TF(4);
-    const std::size_t disk_npts = disk_indices.size();
-    const TF area_cell          = area_disk / static_cast<TF>(disk_npts);
+    const TF area_disk = TF(M_PI) * diameter * diameter / TF(4);
 
-    // Compute average disk velocity
-    TF disk_vel[turbine_idx];
-    calc_disk_velocity<TF>(
-        turbine_idx,
-        fields.mp.at("u")->fld.data(),
-        gd.utrans,
-        diameter,
-        tsr,
-        i_center,
-        disk_indices,
-        disk_vel,
-        omega);
+    for (int it = 0; it < nturbine; ++it)
+    {
+        const std::size_t disk_npts = disk_indices[it].size();
+        if (disk_npts == 0)
+            continue; // this turbine doesn’t intersect this rank
 
-    // Compute forces at each disk (axial and tangential)
-    calc_disk_forces<TF>(
-        turbine_idx,
-        fields.mp.at("u")->fld.data(),
-        fields.mp.at("v")->fld.data(),
-        fields.mp.at("w")->fld.data(),
-        fields.mp.at("u")->fld.data(),
-        gd.utrans,
-        cp,
-        ct,
-        area_cell,
-        disk_indices,
-        disk_vel[turbine_idx], omega[turbine_idx],
-        angle, radial_dist,
-        i_center, gd.icells, gd.ijcells);
+        const TF area_cell = area_disk / static_cast<TF>(disk_npts);
 
-    // Disk power, integrated over the disk.
-    calc_disk_power_torque<TF>(
-        turbine_idx,
-        fields.mp.at("u")->fld.data(), gd.utrans,
-        cp,
-        area_cell,
-        i_center,
-        disk_indices,
-        disk_vel[turbine_idx], omega[turbine_idx],
-        power[turbine_idx], torque[turbine_idx]);
+        // Compute average disk velocity
+        calc_disk_velocity<TF>(
+            fields.mp.at("u")->fld.data(),
+            gd.utrans,
+            diameter,
+            tsr,
+            i_center[it],
+            disk_indices[it],
+            disk_vel[it],
+            omega[it]);
+
+        // Compute forces at each disk (axial and tangential)
+        calc_disk_forces<TF>(
+            fields.mt.at("u")->fld.data(),
+            fields.mt.at("v")->fld.data(),
+            fields.mt.at("w")->fld.data(),
+            fields.mp.at("u")->fld.data(),
+            gd.utrans,
+            cp,
+            ct,
+            gd.dx,
+            disk_indices[it],
+            disk_vel[it], 
+            omega[it],
+            angle[it], 
+            radial_dist[it],
+            i_center[it], 
+            gd.icells,
+            gd.ijcells);
+
+        // Disk power, integrated over the rotor
+        calc_disk_power_torque<TF>(
+            fields.mp.at("u")->fld.data(), 
+            gd.utrans,
+            cp,
+            area_cell,
+            i_center[it],
+            disk_indices[it],
+            disk_vel[it], 
+            omega[it],
+            power[it], 
+            torque[it]);
+
+            // TODO: Add tower drag calculation if enabled. If disabled, skip
+    }
 }
 #endif
 

@@ -48,6 +48,12 @@ class Turbine
         void create(Input&, Stats<TF>&);    // Setup disk indicies
         void exec(Stats<TF>& stats);        // Calculate velocities, forcing, power, yaw of actuator disk
 
+        // Enable turbines only if sw_adm and turbine_starttime are satisfied
+        bool is_active(TF time) const
+        {
+            return sw_adm && time >= turbine_starttime;
+        }
+        
         // GPU functions and variables
         #ifdef USECUDA
         void prepare_device();
@@ -63,38 +69,52 @@ class Turbine
 
         // Internal switches
         bool sw_adm;        // switch to enable turbine modules
-        bool sw_windfarm;   // switch to enable multipl turbines in a farm arrangement
+        bool sw_tower;      // switch to enable tower and nacelle drag
+        // bool sw_dynyaw;     // switch to enable dynamic yaw (not developed yet)
 
         // wind farm parameters
-        int nturbine;   // number of turbines if sw_windfarm is enabled
+        int nturbine;       // number of turbines
 
         // turbine parameters
-        TF diameter;    // disk diameter [m]
-        TF height;      // disk center height in meters
-        TF area_disk;   // geometrical disk area [m^2]
-        TF cp;          // power coefficient (rotationl forcing)
-        TF ct;          // thrust coefficient (axial forcing)
-        TF tsr;         // tip-speed ratio
-        TF xc;          // streamwise coordinates of disk center [m]
-        TF yc;          // horizontal coordinates of disk center [m]
-        int k_center;   // vertical index of disk center
-        int i_center;   // horizontal i-index of disk center
-        int j_center;   // horizontal j-index of disk center
-        std::vector<int> turbine_idx;   // Turbine index
-        std::vector<int> disk_indices;  // flattened indices of points inside disk
-        std::vector<TF>  radial_dist;   // radial distance of points from hub center
-        std::vector<TF>  disk_vel;      // space averaged disk velocity [m/s]
-        std::vector<TF>  omega;         // radial velocity of rotor [1/s]
+        TF diameter;        // disk diameter [m]
+        TF height;          // disk center height in meters
+        TF area_disk;       // geometrical disk area [m^2]
+        TF cp;              // power coefficient (rotationl forcing)
+        TF ct;              // thrust coefficient (axial forcing)
+        TF tsr;             // tip-speed ratio
+        std::vector<TF> xc; // streamwise coordinates of disk center [m]
+        std::vector<TF> yc; // horizontal coordinates of disk center [m]
+        std::vector<int> i_center;                  // horizontal i-index of disk center
+        std::vector<std::vector<int>> disk_indices; // flattened indices of points inside disk
 
-        // Turbine statistics/diagnostics
+        // Turbine statistics
         TF turbine_starttime;   // start time for turbines [s]
         TF turbine_statstart;   // start time for turbine statistics [s]
         TF turbine_statperiod;  // period for turbine statistics [s]
 
+        // // Dynamic yaw parameters
+        // TF yaw_starttime;           // start time for yaw algorithm [s]
+        // TF yaw_period;              // period between yaw adjustment [s]
+        // TF scanning_dist;           // distance upstream of rotor to calculate wind direction [m]
+        // std::vector<TF> yaw_offset; // manual yaw offset from wind direction [deg]
+        // std::vector<TF> theta;      // yaw angle [deg]
+    
         // Turbine forcing variables
         TF ftx; // thrust force on actuator disk
         TF fty; // tanent force in y, for wake rotation
         TF ftz; // tanent force in z, for wake rotation
+
+        // Tower and Nacelle variables
+        TF tower_diameter;  // Tower diameter
+        TF cd;              // Tower drag coefficient
+
+        // Derived quantities
+        std::vector<std::vector<TF>> radial_dist;   // radial distance of points from hub center
+        std::vector<std::vector<TF>> angle;         // azimuthal angle of points from hub center
+        std::vector<TF> disk_vel;   // space averaged disk velocity [m/s]
+        std::vector<TF> omega;      // radial velocity of rotor [1/s]
+        std::vector<TF> power;      // turbine-integrated power [W]    
+        std::vector<TF> torque;     // turbine-integrated rotational torque [N-m]
 
         // Strings
         const std::string tend_name = "turbine";    // tendency name
