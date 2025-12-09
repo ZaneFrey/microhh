@@ -440,7 +440,7 @@ void Model<TF>::exec()
 
                 // Apply turbine (actuator disk) forcing
                 if (turbine->is_active(static_cast<TF>(timeloop->get_time())))
-                    turbine->exec(*stats);
+                    turbine->exec(timeloop->get_sub_time_step(), *stats);
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);

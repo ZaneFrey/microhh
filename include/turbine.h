@@ -46,7 +46,7 @@ class Turbine
 
         void init();                        // Initialize turbines from input file.
         void create(Input&, Stats<TF>&);    // Setup disk indicies
-        void exec(Stats<TF>& stats);        // Calculate velocities, forcing, power, yaw of actuator disk
+        void exec(const double dt, Stats<TF>& stats); // Calculate velocities, forcing, power, yaw of actuator disk
 
         // Enable turbines only if sw_adm and turbine_starttime are satisfied
         bool is_active(TF time) const
@@ -91,6 +91,8 @@ class Turbine
         TF turbine_starttime;   // start time for turbines [s]
         TF turbine_statstart;   // start time for turbine statistics [s]
         TF turbine_statperiod;  // period for turbine statistics [s]
+        TF disk_avg_time;       // disk averaging time for time-filter [s]
+        TF weight;              // weight for time-filerting actuator disk [-]
 
         // // Dynamic yaw parameters
         // TF yaw_starttime;           // start time for yaw algorithm [s]

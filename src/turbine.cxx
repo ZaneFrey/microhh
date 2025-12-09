@@ -187,6 +187,8 @@ namespace
         const TF utrans,
         const TF diameter,
         const TF tsr,
+        const TF disk_vel_old,
+        const TF weight,
         const int i_center,
         const std::vector<int>& disk_indices,
         TF& disk_vel,
@@ -198,8 +200,7 @@ namespace
             omega    = TF(0);
             return;
         }
-        
-        // Calculate average rotor velocity at rotor disk
+
         TF sum = TF(0);
         for (const int offset : disk_indices)
         {
@@ -207,8 +208,11 @@ namespace
             sum += u[ijk] + utrans;
         }
 
-        disk_vel = sum / static_cast<TF>(disk_indices.size());  // disk-average streamwise velocity
-        omega    = tsr * disk_vel / (diameter / 2);             // angular velocity
+        const TF disk_space_avg = sum / static_cast<TF>(disk_indices.size());
+
+        disk_vel = ((TF(1) - weight) * disk_vel_old) + (weight * disk_space_avg);
+
+        omega = tsr * disk_vel / (diameter / TF(2));
     }
 
    template<typename TF>
@@ -372,7 +376,7 @@ Turbine<TF>::Turbine(
     {
         diameter = input.get_item<TF>("turbine", "diameter", "", TF(100));
         height   = input.get_item<TF>("turbine", "height",   "", TF(100));
-        cp       = input.get_item<TF>("turbine", "cp",       "", TF(0.45));
+        cp       = input.get_item<TF>("turbine", "cp",       "", TF(0.8));
         ct       = input.get_item<TF>("turbine", "ct",       "", TF(1.333));
         tsr      = input.get_item<TF>("turbine", "tsr",      "", TF(8));
         xc       = input.get_list<TF>("turbine", "xc", "", std::vector<TF>());
@@ -386,7 +390,8 @@ Turbine<TF>::Turbine(
 
         nturbine = static_cast<int>(xc.size());
     
-        turbine_starttime = input.get_item<TF>("turbine","admstarttime","",TF(0));
+        turbine_starttime   = input.get_item<TF>("turbine","admstarttime","",TF(0));
+        disk_avg_time       = input.get_item<TF>("turbine","diskavgtime","",TF(600));
 
         // allocate per‑turbine storage
         i_center.resize(nturbine);
@@ -445,7 +450,7 @@ void Turbine<TF>::create(
 
 #ifndef USECUDA
 template<typename TF>
-void Turbine<TF>::exec(Stats<TF>& stats)
+void Turbine<TF>::exec(const double dt, Stats<TF>& stats)
 {
     if (!sw_adm)
         return;
@@ -454,6 +459,11 @@ void Turbine<TF>::exec(Stats<TF>& stats)
         return;
 
     auto& gd = grid.get_grid_data();
+
+    // Weighting function for time-filerting
+    const TF dt_TF   = static_cast<TF>(dt);
+    const TF ratio   = dt_TF / disk_avg_time;
+    weight           = ratio / (TF(1) + ratio);
 
     // Calculate disk area and equivalent cell areas
     const TF area_disk = TF(M_PI) * diameter * diameter / TF(4);
@@ -472,9 +482,11 @@ void Turbine<TF>::exec(Stats<TF>& stats)
             gd.utrans,
             diameter,
             tsr,
+            disk_vel[it], // old velocity
+            weight,
             i_center[it],
             disk_indices[it],
-            disk_vel[it],
+            disk_vel[it],   // new velocity
             omega[it]);
 
         // Compute forces at each disk (axial and tangential)
