@@ -392,6 +392,7 @@ Turbine<TF>::Turbine(
     
         turbine_starttime   = input.get_item<TF>("turbine","admstarttime","",TF(0));
         disk_avg_time       = input.get_item<TF>("turbine","diskavgtime","",TF(600));
+        sw_timefilter       = input.get_item<bool>("turbine","swtimefilter","",true);
 
         // allocate per‑turbine storage
         i_center.resize(nturbine);
@@ -460,10 +461,19 @@ void Turbine<TF>::exec(const double dt, Stats<TF>& stats)
 
     auto& gd = grid.get_grid_data();
 
+
     // Weighting function for time-filerting
-    const TF dt_TF   = static_cast<TF>(dt);
-    const TF ratio   = dt_TF / disk_avg_time;
-    weight           = ratio / (TF(1) + ratio);
+    const TF dt_TF = static_cast<TF>(dt);
+    if (sw_timefilter)
+    {
+        const TF ratio = dt_TF / disk_avg_time;
+        weight         = ratio / (TF(1) + ratio);
+    }
+    else // Disable time-filtering: use instantaneous disk-space average
+    {
+        
+        weight = TF(1);
+    }
 
     // Calculate disk area and equivalent cell areas
     const TF area_disk = TF(M_PI) * diameter * diameter / TF(4);

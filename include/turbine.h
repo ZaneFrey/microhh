@@ -70,6 +70,7 @@ class Turbine
         // Internal switches
         bool sw_adm;        // switch to enable turbine modules
         bool sw_tower;      // switch to enable tower and nacelle drag
+        bool sw_timefilter; // switch to enable actuator disk time-filtering
         // bool sw_dynyaw;     // switch to enable dynamic yaw (not developed yet)
 
         // wind farm parameters
