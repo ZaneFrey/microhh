@@ -48,7 +48,11 @@
 #include "grid_kernels.h"
 
 
-using namespace Stats_functions;
+namespace
+{
+    using namespace Stats_functions;
+    using namespace Tools_g;
+}
 
 
 template<typename TF>
@@ -69,16 +73,15 @@ void Stats<TF>::calc_stats_mean(
 {
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
-        cuda_check_error();
     auto masked = fields.get_tmp_g();
-    // Calc mean of atmospheric variables
+
+    // Calc mean of atmospheric variables.
     if (std::find(varlist.begin(), varlist.end(), varname) != varlist.end())
     {
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  fld.fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
@@ -99,7 +102,7 @@ void Stats<TF>::calc_stats_mean(
     }
     fields.release_tmp_g(masked);
 
-    name = varname + "_bot";
+    std::string name = varname + "_bot";
     calc_stats_2d_g(name, fld.fld_bot_g, offset);
 }
 
@@ -109,9 +112,6 @@ void Stats<TF>::calc_stats_2d_g(
 {
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
     auto masked = fields.get_tmp_xy_g();
     // Calc mean of atmospheric variables
     if (std::find(varlist.begin(), varlist.end(), varname) != varlist.end())
@@ -120,7 +120,8 @@ void Stats<TF>::calc_stats_2d_g(
         {
             if (m.second.nmask_bot > 0)
             {
-
+                unsigned int flag;
+                const int* nmask;
                 set_flag(flag, nmask, m.second, 1);
                 auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, 1);
 
@@ -143,12 +144,8 @@ template<typename TF>
 void Stats<TF>::calc_stats_moments(
         const std::string& varname, const Field3d<TF>& fld, const TF offset)
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
             cuda_check_error();
 
         cuda_check_error();
@@ -158,12 +155,14 @@ void Stats<TF>::calc_stats_moments(
 
     for (int power=2; power<=4; power++)
     {
-        name = varname + "_" + std::to_string(power);
+        const std::string name = varname + "_" + std::to_string(power);
 
         if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
         {
             for (auto& m : masks)
             {
+                unsigned int flag;
+                const int* nmask;
                 set_flag(flag, nmask, m.second, fld.loc[2]);
                 auto threads_1d = grid.get_dim_gpu(gd.ijcells);
                 auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
@@ -199,24 +198,22 @@ template<typename TF>
 void Stats<TF>::calc_stats_w(
         const std::string& varname, const Field3d<TF>& fld, const TF offset)
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
         cuda_check_error();
     auto masked = fields.get_tmp_g();
     auto advec_flux = fields.get_tmp_g();
 
     // Calc Resolved Flux
-    name = varname + "_w";
+    const std::string name = varname + "_w";
     if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
     {
         advec.get_advec_flux(*advec_flux, fld);
 
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  advec_flux->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
@@ -242,25 +239,22 @@ template<typename TF>
 void Stats<TF>::calc_stats_diff(
         const std::string& varname, const Field3d<TF>& fld, const TF offset)
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
         cuda_check_error();
     auto masked = fields.get_tmp_g();
     auto diff_flux = fields.get_tmp_g();
 
-
     // Calc Diffusive Flux
-    name = varname + "_diff";
+    const std::string name = varname + "_diff";
     if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
     {
         diff.get_diff_flux(*diff_flux, fld);
 
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, !fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(), diff_flux->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
@@ -286,15 +280,10 @@ template<typename TF>
 void Stats<TF>::calc_stats_path(
         const std::string& varname, const Field3d<TF>& fld)
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
-
     // Calc Integrated Path
-    name = varname + "_path";
+    const std::string name = varname + "_path";
 
         cuda_check_error();
     auto masked = fields.get_tmp_g();
@@ -303,6 +292,8 @@ void Stats<TF>::calc_stats_path(
     {
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             auto threads_ncells = grid.get_dim_gpu(gd.ncells);
@@ -337,17 +328,11 @@ void Stats<TF>::calc_stats_path(
 template<typename TF>
 void Stats<TF>::calc_stats_cover(
         const std::string& varname, const Field3d<TF>& fld, const TF offset, const TF threshold)
-
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
-
     // Calc Integrated Path
-    name = varname + "_cover";
+    const std::string name = varname + "_cover";
 
         cuda_check_error();
     auto masked = fields.get_tmp_g();
@@ -356,6 +341,8 @@ void Stats<TF>::calc_stats_cover(
     {
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             auto threads_ijcells = grid.get_dim_gpu(gd.ijcells);
@@ -389,17 +376,11 @@ void Stats<TF>::calc_stats_cover(
 template<typename TF>
 void Stats<TF>::calc_stats_frac(
         const std::string& varname, const Field3d<TF>& fld, const TF offset, const TF threshold)
-
 {
-    using namespace Tools_g;
-
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
     // Calc Fraction
-    name = varname + "_frac";
+    const std::string name = varname + "_frac";
 
         cuda_check_error();
     auto masked = fields.get_tmp_g();
@@ -412,6 +393,8 @@ void Stats<TF>::calc_stats_frac(
 
             add_val<<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), fld.fld_g.data(), gd.ncells, offset - threshold);
             sign_by_arr<TF><<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), gd.ncells);
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  fld.fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
             field3d_operators.calc_mean_profile_g(masked->fld_mean_g, masked->fld_g);
@@ -438,14 +421,9 @@ void Stats<TF>::calc_tend(Field3d<TF>& fld, const std::string& tend_name)
     if (!doing_tendency)
         return;
 
-    using namespace Tools_g;
-
     auto& gd = grid.get_grid_data();
 
-    unsigned int flag;
-    const int* nmask;
-
-    std::string name = fld.name + "_" + tend_name;
+    const std::string name = fld.name + "_" + tend_name;
     if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
     {
         tendency_order.at(fld.name).push_back(tend_name);
@@ -454,6 +432,8 @@ void Stats<TF>::calc_tend(Field3d<TF>& fld, const std::string& tend_name)
 
         for (auto& m : masks)
         {
+            unsigned int flag;
+            const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
             auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  fld.fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
@@ -478,7 +458,6 @@ void Stats<TF>::initialize_masks()
 {
     auto& gd = grid.get_grid_data();
     unsigned int flagmax = 0;
-    using namespace Tools_g;
 
     for (auto& it : masks){
         flagmax += it.second.flag + it.second.flagh;
@@ -499,7 +478,6 @@ void Stats<TF>::initialize_masks()
 template<typename TF>
 void Stats<TF>::finalize_masks()
 {
-    using namespace Tools_g;
     auto& gd = grid.get_grid_data();
 
     boundary_cyclic.exec_g(mfield_g);
@@ -507,8 +485,6 @@ void Stats<TF>::finalize_masks()
 
     auto masked = fields.get_tmp_g();
     auto ones = fields.get_tmp_g();
-    const int nmemsize = gd.kcells*sizeof(int);
-
     std::vector<TF> nmask_TF(gd.kcells);
     auto threads1d = grid.get_dim_gpu(gd.ncells);
 
