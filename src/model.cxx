@@ -646,7 +646,7 @@ void Model<TF>::calculate_statistics(int iteration, double time, unsigned long i
         // microphys->exec_stats(*stats, *thermo, dt);
         diff     ->exec_stats(*stats, *thermo);
         // budget   ->exec_stats(*stats);
-        // boundary ->exec_stats(*stats);
+        boundary ->exec_stats(*stats);
     }
 
     // Save the selected cross sections to disk, cross sections are handled on CPU.

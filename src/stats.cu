@@ -129,8 +129,8 @@ void Stats<TF>::calc_stats_2d_g(
                 const int* nmask;
                 set_flag(flag, nmask, m.second, 1);
 
-                apply_mask_g<<<threads.first, threads.second>>>(masked->data(),  fld.data(), mfield_g, flag, gd.icells, gd.jcells, 1, gd.ijcells);
-                m.second.tseries.at(varname).data = field3d_operators.calc_sum_2d_g(masked->data())/m.second.nmask_bot;
+                apply_mask_g<<<threads.first, threads.second>>>(masked->data(),  fld.data(), mfield_bot_g, flag, gd.icells, gd.jcells, 1, gd.ijcells);
+                m.second.tseries.at(varname).data = field3d_operators.calc_sum_2d_g(masked->data()) / m.second.nmask_bot;
                 master.sum(&m.second.tseries.at(varname).data, 1);
 
                 // Add offset.

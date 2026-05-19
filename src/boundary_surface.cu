@@ -525,6 +525,21 @@ void Boundary_surface<TF>::exec(
 }
 
 template<typename TF>
+void Boundary_surface<TF>::exec_stats(Stats<TF>& stats)
+{
+    const TF no_offset = 0.;
+
+    stats.calc_stats_2d_g("obuk", obuk_g, no_offset);
+    stats.calc_stats_2d_g("ustar", ustar_g, no_offset);
+
+    if (sw_charnock)
+    {
+        stats.calc_stats_2d_g("z0m", z0m_g, no_offset);
+        stats.calc_stats_2d_g("z0h", z0h_g, no_offset);
+    }
+}
+
+template<typename TF>
 void Boundary_surface<TF>::exec_column(Column<TF>& column)
 {
     const TF no_offset = 0.;

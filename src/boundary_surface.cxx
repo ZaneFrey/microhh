@@ -718,6 +718,7 @@ void Boundary_surface<TF>::exec_cross(Cross<TF>& cross, unsigned long iotime)
     fields.release_tmp(tmp1);
 }
 
+#ifndef USECUDA
 template<typename TF>
 void Boundary_surface<TF>::exec_stats(Stats<TF>& stats)
 {
@@ -731,6 +732,7 @@ void Boundary_surface<TF>::exec_stats(Stats<TF>& stats)
         stats.calc_stats_2d("z0h", z0h, no_offset);
     }
 }
+#endif
 
 #ifndef USECUDA
 template<typename TF>
