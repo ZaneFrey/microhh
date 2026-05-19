@@ -13,7 +13,8 @@ endif()
 
 # Set compiler flags / options:
 if(USECUDA)
-    set(USER_CXX_FLAGS "-acc -cuda -gpu=cc86")
+    set(USER_CXX_FLAGS "-acc -cuda -gpu=cc75")
+    #set(USER_CXX_FLAGS "-acc -cuda -gpu=cc86")
     set(USER_CXX_FLAGS_RELEASE "-O3")
     set(USER_CXX_FLAGS_DEBUG "-O0 -g -Wall")
 
@@ -40,7 +41,8 @@ set(LIBS ${FFTW_LIB} ${FFTWF_LIB} ${NETCDF_LIB_C} ${HDF5_LIB}) #It may be necess
 
 if(USECUDA)
     set(CMAKE_CUDA_HOST_COMPILER $ENV{CXX})
-    set(CMAKE_CUDA_ARCHITECTURES 86)
+    set(CMAKE_CUDA_ARCHITECTURES 75)
+    #set(CMAKE_CUDA_ARCHITECTURES 86)
     set(USER_CUDA_NVCC_FLAGS "--expt-relaxed-constexpr")
     set(USER_CUDA_NVCC_FLAGS_RELEASE "-DNDEBUG")
     set(USER_CUDA_NVCC_FLAGS_DEBUG "-O0 -g -DCUDACHECKS")

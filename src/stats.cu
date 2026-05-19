@@ -51,6 +51,17 @@
 using namespace Stats_functions;
 
 
+template<typename TF>
+void Stats<TF>::prepare_device()
+{
+    auto& gd = grid.get_grid_data();
+
+    cuda_safe_call(cudaMalloc(&mfield_g, gd.ncells * sizeof(unsigned int)));
+    cuda_safe_call(cudaMalloc(&mfield_bot_g, gd.ijcells * sizeof(unsigned int)));
+    cuda_check_error();
+}
+
+
 #ifdef USECUDA
 template<typename TF>
 void Stats<TF>::calc_stats_mean(
@@ -127,81 +138,6 @@ void Stats<TF>::calc_stats_2d_g(
 
 }
 
-#endif
-
-
-#ifdef USECUDA
-
-    __global__
-    void set_to_val_g(
-            unsigned int* const __restrict__ fld, const unsigned int value,
-            const int icells, const int jcells, const int kcells,
-            const int ijcells)
-    {
-        const int i = blockIdx.x*blockDim.x + threadIdx.x;
-        const int j = blockIdx.y*blockDim.y + threadIdx.y;
-        const int k = blockIdx.z;
-
-        if (i < icells && j < jcells && k < kcells)
-        {
-            const int ijk = i + j*icells + k*ijcells;
-            fld[ijk] = value;
-        }
-    }
-
-    template<typename TF> __global__
-    void set_to_val_g(
-            TF* const __restrict__ fld, const TF value,
-            const int icells, const int jcells, const int kcells,
-            const int ijcells)
-    {
-        const int i = blockIdx.x*blockDim.x + threadIdx.x;
-        const int j = blockIdx.y*blockDim.y + threadIdx.y;
-        const int k = blockIdx.z;
-
-        if (i < icells && j < jcells && k < kcells)
-        {
-            const int ijk = i + j*icells + k*ijcells;
-            fld[ijk] = value;
-        }
-    }
-    // template<typename TF> __global__
-    // void add_val(TF* __restrict__ a, const TF* const __restrict__ fld, int nsize, TF val)
-    // {
-    //     const int n = blockIdx.x*blockDim.x + threadIdx.x;
-
-    //     if (n < nsize)
-    //         a[n] = fld[n] + val;
-    // }
-
-    // template<typename TF> __global__
-    // void raise_to_pow(TF* __restrict__ a, const int nsize, const int exponent)
-    // {
-    //     const int n = blockIdx.x*blockDim.x + threadIdx.x;
-
-    //     if (n < nsize)
-    //         a[n] = pow(a[n], exponent);
-    // }
-
-    template<typename TF> __global__
-    void add_profile(
-            TF* __restrict__ fld,
-            const TF* __restrict__ profile,
-            const int istart, const int iend,
-            const int jstart, const int jend,
-            const int kstart, const int kend,
-            const int icells, const int ijcells)
-    {
-        const int i = blockIdx.x*blockDim.x + threadIdx.x + istart;
-        const int j = blockIdx.y*blockDim.y + threadIdx.y + jstart;
-        const int k = blockIdx.z + kstart;
-
-        if ((i < iend) && (j < jend) && (k < kend))
-        {
-            const int ijk = i + j*icells + k*ijcells;
-            fld[ijk] += profile[k];
-        }
-    }
 
 template<typename TF>
 void Stats<TF>::calc_stats_moments(
@@ -344,9 +280,6 @@ void Stats<TF>::calc_stats_diff(
     fields.release_tmp_g(masked);
 
 }
-
-
-
 
 
 template<typename TF>
@@ -539,21 +472,7 @@ void Stats<TF>::calc_tend(Field3d<TF>& fld, const std::string& tend_name)
     }
 }
 
-#endif
 
-
-
-template<typename TF>
-void Stats<TF>::prepare_device()
-{
-    auto& gd = grid.get_grid_data();
-
-    cuda_safe_call(cudaMalloc(&mfield_g, gd.ncells * sizeof(unsigned int)));
-    cuda_safe_call(cudaMalloc(&mfield_bot_g, gd.ijcells * sizeof(unsigned int)));
-    cuda_check_error();
-}
-
-#ifdef USECUDA
 template<typename TF>
 void Stats<TF>::initialize_masks()
 {
