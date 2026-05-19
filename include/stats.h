@@ -170,6 +170,7 @@ class Stats
 
         void calc_stats_2d(const std::string&, const std::vector<TF>&, const TF);
         #ifdef USECUDA
+        void calc_stats_2d_g(const std::string&, const TF* const, const TF);
         void calc_stats_2d_g(const std::string&, const cuda_vector<TF>&, const TF);
         #endif
         void calc_stats_soil(const std::string, const std::vector<TF>&, const TF);

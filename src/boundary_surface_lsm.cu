@@ -742,6 +742,55 @@ void Boundary_surface_lsm<TF>::exec(
 }
 
 template<typename TF>
+void Boundary_surface_lsm<TF>::exec_stats(Stats<TF>& stats)
+{
+    const TF no_offset = 0.;
+
+    auto tmp = fields.get_tmp_xy_g();
+
+    // Surface layer
+    stats.calc_stats_2d_g("obuk", obuk_g, no_offset);
+    stats.calc_stats_2d_g("ustar", ustar_g, no_offset);
+
+    // Land-surface
+    stats.calc_stats_2d_g("wl", fields.ap2d.at("wl")->fld_g, no_offset);
+
+    get_tiled_mean_g(tmp->data(), "H", TF(1));
+    stats.calc_stats_2d_g("H", *tmp, no_offset);
+
+    get_tiled_mean_g(tmp->data(), "LE", TF(1));
+    stats.calc_stats_2d_g("LE", *tmp, no_offset);
+
+    get_tiled_mean_g(tmp->data(), "G", TF(1));
+    stats.calc_stats_2d_g("G", *tmp, no_offset);
+
+    get_tiled_mean_g(tmp->data(), "S", TF(1));
+    stats.calc_stats_2d_g("S", *tmp, no_offset);
+
+    if (sw_tile_stats)
+        for (auto& tile : tiles)
+        {
+            stats.calc_stats_2d_g("c_"+tile.first, tile.second.fraction_g, no_offset);
+
+            stats.calc_stats_2d_g("ustar_"+tile.first, tile.second.ustar_g, no_offset);
+            stats.calc_stats_2d_g("obuk_"+tile.first, tile.second.obuk_g, no_offset);
+
+            stats.calc_stats_2d_g("rs_"+tile.first, tile.second.rs_g, no_offset);
+            stats.calc_stats_2d_g("ra_"+tile.first, tile.second.ra_g, no_offset);
+
+            stats.calc_stats_2d_g("thl_bot_"+tile.first, tile.second.thl_bot_g, no_offset);
+            stats.calc_stats_2d_g("qt_bot_"+tile.first, tile.second.qt_bot_g, no_offset);
+
+            stats.calc_stats_2d_g("H_"+tile.first, tile.second.H_g, no_offset);
+            stats.calc_stats_2d_g("LE_"+tile.first, tile.second.LE_g, no_offset);
+            stats.calc_stats_2d_g("G_"+tile.first, tile.second.G_g, no_offset);
+            stats.calc_stats_2d_g("S_"+tile.first, tile.second.S_g, no_offset);
+        }
+
+    fields.release_tmp_xy_g(tmp);
+}
+
+template<typename TF>
 void Boundary_surface_lsm<TF>::exec_column(Column<TF>& column)
 {
     const TF no_offset = 0.;

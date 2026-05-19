@@ -1583,6 +1583,7 @@ void Boundary_surface_lsm<TF>::exec_cross(Cross<TF>& cross, unsigned long iotime
     fields.release_tmp(tmp);
 }
 
+#ifndef USECUDA
 template<typename TF>
 void Boundary_surface_lsm<TF>::exec_stats(Stats<TF>& stats)
 {
@@ -1635,6 +1636,7 @@ void Boundary_surface_lsm<TF>::exec_stats(Stats<TF>& stats)
 
     fields.release_tmp_xy(fld_mean);
 }
+#endif
 
 #ifndef USECUDA
 template<typename TF>

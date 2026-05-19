@@ -112,7 +112,7 @@ void Stats<TF>::calc_stats_mean(
 
 template<typename TF>
 void Stats<TF>::calc_stats_2d_g(
-        const std::string& varname, const cuda_vector<TF>& fld, const TF offset)
+        const std::string& varname, const TF* const fld, const TF offset)
 {
     auto& gd = grid.get_grid_data();
     auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, 1);
@@ -129,7 +129,7 @@ void Stats<TF>::calc_stats_2d_g(
                 const int* nmask;
                 set_flag(flag, nmask, m.second, 1);
 
-                apply_mask_g<<<threads.first, threads.second>>>(masked->data(),  fld.data(), mfield_bot_g, flag, gd.icells, gd.jcells, 1, gd.ijcells);
+                apply_mask_g<<<threads.first, threads.second>>>(masked->data(), fld, mfield_bot_g, flag, gd.icells, gd.jcells, 1, gd.ijcells);
                 m.second.tseries.at(varname).data = field3d_operators.calc_sum_2d_g(masked->data()) / m.second.nmask_bot;
                 master.sum(&m.second.tseries.at(varname).data, 1);
 
@@ -142,6 +142,13 @@ void Stats<TF>::calc_stats_2d_g(
     }
 
     fields.release_tmp_xy_g(masked);
+}
+
+template<typename TF>
+void Stats<TF>::calc_stats_2d_g(
+        const std::string& varname, const cuda_vector<TF>& fld, const TF offset)
+{
+    calc_stats_2d_g(varname, fld.data(), offset);
 }
 
 
