@@ -46,7 +46,7 @@ from copy import deepcopy
 def _int_or_float_or_str(value):
     """ Helper function: convert a string to int/float/str """
     try:
-        if ('.' in value):
+        if ('.' in value or 'e' in value.lower()):
             return float(value)
         else:
             return int(float(value))
@@ -495,6 +495,7 @@ def restart_pre(origin, timestr):
     fnames += glob.glob('../' + origin + '/grid.0000000')
     fnames += glob.glob('../' + origin + '/fftwplan.0000000')
     fnames += glob.glob('../' + origin + '/thermo_basestate.0000000')
+    fnames += glob.glob('../' + origin + '/rhoref.0000000')
     fnames += glob.glob('../' + origin + '/*.' + timestr)
     for file in fnames:
         shutil.copy(file, '.')

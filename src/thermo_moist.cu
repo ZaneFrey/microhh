@@ -1518,21 +1518,21 @@ void Thermo_moist<TF>::exec_stats(Stats<TF>& stats)
     auto threads_kcells = grid.get_dim_gpu(gd.kcells);
 
 
-    set_to_val<<<threads_ncells.first, threads_ncells.second>>>(ql->fld_g.data(), gd.ncells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->flux_bot_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->flux_top_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->fld_g.data(), gd.ncells, TF(0.));
+    set_to_val(ql->flux_bot_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->flux_top_g.data(), gd.ijcells, TF(0.));
 
     get_thermo_field_g(*ql, "ql", true);
     stats.calc_stats("ql", *ql, no_offset, no_threshold);
 
-    set_to_val<<<threads_kcells.first, threads_kcells.second>>>(ql->fld_mean_g.data(), gd.kcells, TF(0.));
-    set_to_val<<<threads_ncells.first, threads_ncells.second>>>(ql->fld_g.data(), gd.ncells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->fld_bot_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->fld_top_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->flux_bot_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->flux_top_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->grad_bot_g.data(), gd.ijcells, TF(0.));
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(ql->grad_top_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->fld_mean_g.data(), gd.kcells, TF(0.));
+    set_to_val(ql->fld_g.data(), gd.ncells, TF(0.));
+    set_to_val(ql->fld_bot_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->fld_top_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->flux_bot_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->flux_top_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->grad_bot_g.data(), gd.ijcells, TF(0.));
+    set_to_val(ql->grad_top_g.data(), gd.ijcells, TF(0.));
 
     ql->loc = gd.wloc;
     get_thermo_field_g(*ql, "ql_h", true);

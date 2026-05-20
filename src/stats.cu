@@ -312,7 +312,7 @@ void Stats<TF>::calc_stats_path(
             const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
 
-            set_to_val<<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), gd.ncells, TF(1.));
+            set_to_val(masked->fld_g.data(), gd.ncells, TF(1.));
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  masked->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
             field3d_operators.calc_proj_sum_g(mask_proj->data(), masked->fld_g.data());
@@ -324,7 +324,7 @@ void Stats<TF>::calc_stats_path(
             for (int k = gd.kstart; k < gd.kend+1; ++k)
             {
                 int kk = k * gd.ijcells;
-                mult_by_val<TF><<<threads_ijcells.first, threads_ijcells.second>>>(&masked->fld_g[kk], gd.ijcells, TF(fields.rhoref[k]*gd.dz[k]));
+                mult_by_val<TF>(&masked->fld_g[kk], gd.ijcells, TF(fields.rhoref[k]*gd.dz[k]));
             }
 
             m.second.tseries.at(name).data = field3d_operators.calc_sum_g(masked->fld_g)/denominator;
@@ -358,7 +358,7 @@ void Stats<TF>::calc_stats_cover(
             const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
 
-            set_to_val<<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), gd.ncells, TF(1.));
+            set_to_val(masked->fld_g.data(), gd.ncells, TF(1.));
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  masked->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
             field3d_operators.calc_proj_sum_g(mask_proj->data(), masked->fld_g.data());
@@ -479,10 +479,10 @@ void Stats<TF>::initialize_masks()
     for (auto& it : masks)
         flagmax += it.second.flag + it.second.flagh;
 
-    set_to_val<<<threads_ncells.first, threads_ncells.second>>>(mfield_g, gd.ncells, flagmax);
+    set_to_val(mfield_g, gd.ncells, flagmax);
     cuda_check_error();
 
-    set_to_val<<<threads_ijcells.first, threads_ijcells.second>>>(mfield_bot_g, gd.ijcells, flagmax);
+    set_to_val(mfield_bot_g, gd.ijcells, flagmax);
     cuda_check_error();
 }
 
@@ -501,8 +501,7 @@ void Stats<TF>::finalize_masks()
     auto ones = fields.get_tmp_g();
     std::vector<TF> nmask_TF(gd.kcells);
 
-    set_to_val<TF><<<threads_ncells.first, threads_ncells.second>>>(
-                ones->fld_g, gd.ncells, TF(1.0));
+    set_to_val<TF>(ones->fld_g, gd.ncells, TF(1.0));
     cuda_check_error();
 
     for (auto& it : masks)
