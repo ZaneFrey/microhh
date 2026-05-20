@@ -158,8 +158,6 @@ void Stats<TF>::calc_stats_moments(
 {
     auto& gd = grid.get_grid_data();
     auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
-    auto threads_ijcells = grid.get_dim_gpu(gd.ijcells);
-    auto threads_ncells = grid.get_dim_gpu(gd.ncells);
 
     auto masked = fields.get_tmp_g();
     auto dev = fields.get_tmp_g();
@@ -179,10 +177,10 @@ void Stats<TF>::calc_stats_moments(
                 for (int k = gd.kstart; k < gd.kend+1; ++k)
                 {
                     int kk = k * gd.ijcells;
-                    add_val<<<threads_ijcells.first, threads_ijcells.second>>>(&(dev->fld_g[kk]),&(fld.fld_g[kk]), gd.ijcells, - m.second.profs.at(varname).data[k] + offset);
+                    add_val(&(dev->fld_g[kk]),&(fld.fld_g[kk]), gd.ijcells, - m.second.profs.at(varname).data[k] + offset);
                 }
 
-                raise_to_pow<<<threads_ncells.first, threads_ncells.second>>>(dev->fld_g.data(), gd.ncells, power);
+                raise_to_pow(dev->fld_g.data(), gd.ncells, power);
 
                 apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  dev->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
                 field3d_operators.calc_mean_profile_g(masked->fld_mean_g, masked->fld_g);
@@ -296,8 +294,6 @@ void Stats<TF>::calc_stats_path(
 {
     auto& gd = grid.get_grid_data();
     auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
-    auto threads_ncells = grid.get_dim_gpu(gd.ncells);
-    auto threads_ijcells = grid.get_dim_gpu(gd.ijcells);
 
     // Calc integrated Path.
     auto masked = fields.get_tmp_g();
@@ -316,7 +312,7 @@ void Stats<TF>::calc_stats_path(
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  masked->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
             field3d_operators.calc_proj_sum_g(mask_proj->data(), masked->fld_g.data());
-            sign_by_arr<TF><<<threads_ijcells.first, threads_ijcells.second>>>(mask_proj->data(), gd.ijcells);
+            sign_by_arr(mask_proj->data(), gd.ijcells);
             TF denominator = field3d_operators.calc_sum_2d_g(mask_proj->data());
 
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  fld.fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
@@ -343,8 +339,6 @@ void Stats<TF>::calc_stats_cover(
 {
     auto& gd = grid.get_grid_data();
     auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
-    auto threads_ijcells = grid.get_dim_gpu(gd.ijcells);
-    auto threads_ncells = grid.get_dim_gpu(gd.ncells);
 
     auto masked = fields.get_tmp_g();
     auto mask_proj = fields.get_tmp_xy_g();
@@ -362,14 +356,14 @@ void Stats<TF>::calc_stats_cover(
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  masked->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
             field3d_operators.calc_proj_sum_g(mask_proj->data(), masked->fld_g.data());
-            sign_by_arr<TF><<<threads_ijcells.first, threads_ijcells.second>>>(mask_proj->data(), gd.ijcells);
+            sign_by_arr(mask_proj->data(), gd.ijcells);
             TF denominator = field3d_operators.calc_sum_2d_g(mask_proj->data());
 
-            add_val<<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), fld.fld_g.data(), gd.ncells, offset - threshold);
+            add_val(masked->fld_g.data(), fld.fld_g.data(), gd.ncells, offset - threshold);
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  masked->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
             field3d_operators.calc_proj_sum_g(mask_proj->data(), masked->fld_g.data());
-            sign_by_arr<TF><<<threads_ijcells.first, threads_ijcells.second>>>(mask_proj->data(), gd.ijcells);
+            sign_by_arr(mask_proj->data(), gd.ijcells);
             TF numerator = field3d_operators.calc_sum_2d_g(mask_proj->data());
 
             m.second.tseries.at(name).data = numerator / denominator;
@@ -389,7 +383,6 @@ void Stats<TF>::calc_stats_frac(
 {
     auto& gd = grid.get_grid_data();
     auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kcells);
-    auto threads_ncells = grid.get_dim_gpu(gd.ncells);
 
     auto masked = fields.get_tmp_g();
 
@@ -402,8 +395,8 @@ void Stats<TF>::calc_stats_frac(
             const int* nmask;
             set_flag(flag, nmask, m.second, fld.loc[2]);
 
-            add_val<<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), fld.fld_g.data(), gd.ncells, offset - threshold);
-            sign_by_arr<TF><<<threads_ncells.first, threads_ncells.second>>>(masked->fld_g.data(), gd.ncells);
+            add_val(masked->fld_g.data(), fld.fld_g.data(), gd.ncells, offset - threshold);
+            sign_by_arr(masked->fld_g.data(), gd.ncells);
 
             apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(),  fld.fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
             field3d_operators.calc_mean_profile_g(masked->fld_mean_g, masked->fld_g);

@@ -109,9 +109,8 @@ void Decay<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
                 gd.itot*gd.jtot,
                 master);
 
-        auto threads_1d = grid.get_dim_gpu(gd.ncells);
         // copy<<<threads_1d.first, threads_1d.second>>>(couvreuxh->fld_g.data(), couvreux->fld_g.data(), gd.ncells);
-        raise_to_pow<<<threads_1d.first, threads_1d.second>>>(couvreuxh->fld_g.data(), gd.ncells, 2);
+        raise_to_pow(couvreuxh->fld_g.data(), gd.ncells, 2);
         Grid_kernels::calc_mean_prof_kernel(
                 couvreuxh->fld_mean_g.data(),
                 couvreuxh->fld_g.data(),
@@ -122,8 +121,7 @@ void Decay<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
                 gd.itot*gd.jtot,
                 master);
         // Subtract mean and 1 std dev from couvreux scalar
-        auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kmax);
-        subtract_profile<<<threads.first, threads.second>>>(
+        subtract_profile(
                     &(couvreux->fld_g[0]),
                     &(couvreux->fld_mean_g[0]),
                     0, gd.icells,
@@ -134,8 +132,7 @@ void Decay<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
         auto thread_k = grid.get_dim_gpu(gd.kcells);
 
         // Interpolate to half levels
-        // auto threads = grid.get_dim_gpu(gd.icells, gd.jcells, gd.kmax);
-        interpolate_2nd_g<<<threads.first, threads.second>>>(couvreuxh->fld_g.data(), couvreux->fld_g.data(), gd.sloc[0] - gd.wloc[0], gd.sloc[1] - gd.wloc[1], gd.sloc[2] - gd.wloc[2], 0, gd.icells, 0, gd.jcells, gd.kstart, gd.kend, gd.icells, gd.ijcells);
+        interpolate_2nd_g(couvreuxh->fld_g.data(), couvreux->fld_g.data(), gd.sloc[0] - gd.wloc[0], gd.sloc[1] - gd.wloc[1], gd.sloc[2] - gd.wloc[2], 0, gd.icells, 0, gd.jcells, gd.kstart, gd.kend, gd.icells, gd.ijcells);
 
         //Calculate mask
         stats.set_mask_thres(mask_name, *couvreux, *couvreuxh, 0., Stats_mask_type::Plus);

@@ -54,18 +54,18 @@ namespace Tools_g
     void mult_by_val(TF* __restrict__, int, TF);
     template<typename TF> __global__
     void mult_by_arr(TF* __restrict__, int, const TF* const __restrict__ );
-    template<typename TF> __global__
+    template<typename TF>
     void sign_by_arr(TF* __restrict__, int);
-    template<typename TF> __global__
+    template<typename TF>
     void add_val(TF* __restrict__ , const TF* const __restrict__ , int , TF);
     template<typename TF> __global__
     void add_profile(TF* __restrict__ , TF* const  __restrict__ , const int , const int, const int, const int, const int, const int, const int, const int);
-    template<typename TF> __global__
+    template<typename TF>
     void subtract_profile(TF* __restrict__ , TF* const  __restrict__ , const int , const int, const int, const int, const int, const int, const int, const int);
 
-    template<typename TF> __global__
+    template<typename TF>
     void raise_to_pow(TF* __restrict__ , const int, const int);
-    template<typename TF> __global__
+    template<typename TF>
     void interpolate_2nd_g(TF*const  __restrict__, const TF* const __restrict__, const int, const int, const int, const int, const int, const int , const int, const int, const int, const int, const int);
 
 

@@ -1406,16 +1406,14 @@ void Thermo_moist<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
 
         field3d_operators.calc_mean_profile_g(b->fld_mean_g, b->fld_g);
         field3d_operators.calc_mean_profile_g(bh->fld_mean_g, bh->fld_g);
-        auto threads = grid.get_dim_gpu(gd.imax, gd.jmax, gd.kmax);
-
-        subtract_profile<<<threads.first, threads.second>>>(
+        subtract_profile(
                             &(b->fld_g[0]),
                             &(b->fld_mean_g[0]),
                             gd.istart, gd.iend,
                             gd.jstart, gd.jend,
                             gd.kstart, gd.kend,
                             gd.icells, gd.ijcells);
-        subtract_profile<<<threads.first, threads.second>>>(
+        subtract_profile(
                             &(bh->fld_g[0]),
                             &(bh->fld_mean_g[0]),
                             gd.istart, gd.iend,
@@ -1438,16 +1436,15 @@ void Thermo_moist<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
 
         field3d_operators.calc_mean_profile_g(b->fld_mean_g, b->fld_g);
         field3d_operators.calc_mean_profile_g(bh->fld_mean_g, bh->fld_g);
-        auto threads = grid.get_dim_gpu(gd.imax, gd.jmax, gd.kmax);
 
-        subtract_profile<<<threads.first, threads.second>>>(
+        subtract_profile(
                             &(b->fld_g[0]),
                             &(b->fld_mean_g[0]),
                             gd.istart, gd.iend,
                             gd.jstart, gd.jend,
                             gd.kstart, gd.kend,
                             gd.icells, gd.ijcells);
-        subtract_profile<<<threads.first, threads.second>>>(
+        subtract_profile(
                             &(bh->fld_g[0]),
                             &(bh->fld_mean_g[0]),
                             gd.istart, gd.iend,

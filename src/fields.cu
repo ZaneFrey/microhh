@@ -289,9 +289,7 @@ void Fields<TF>::get_mask(Stats<TF>& stats, std::string mask_name)
     {
         // Interpolate w to full level:
         auto wf = get_tmp_g();
-        auto threads = grid.get_dim_gpu(gd.imax, gd.jmax, gd.kmax);
-
-        interpolate_2nd_g<<<threads.first, threads.second>>>(wf->fld_g.data(), mp.at("w")->fld_g.data(), gd.wloc[0] - gd.sloc[0], gd.wloc[1] - gd.sloc[1], gd.wloc[2] - gd.sloc[2], gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells);
+        interpolate_2nd_g(wf->fld_g.data(), mp.at("w")->fld_g.data(), gd.wloc[0] - gd.sloc[0], gd.wloc[1] - gd.sloc[1], gd.wloc[2] - gd.sloc[2], gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells);
         // Calculate masks
         const TF threshold = 0;
         if (mask_name == "wplus")

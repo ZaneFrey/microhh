@@ -251,7 +251,7 @@ namespace Tools_g
     }
 
     template<typename TF> __global__
-    void sign_by_arr(TF* __restrict__ a, int nsize)
+    void sign_by_arr_kernel(TF* __restrict__ a, int nsize)
     {
         const int n = blockIdx.x*blockDim.x + threadIdx.x;
 
@@ -259,13 +259,31 @@ namespace Tools_g
             a[n] = (a[n] > 0) ? 1 : ((a[n] < 0) ? -1 : 0);
     }
 
+    template<typename TF>
+    void sign_by_arr(TF* __restrict__ a, int nsize)
+    {
+        const int nblock = 256;
+        const int ngrid = nsize/nblock + (nsize%nblock > 0);
+        sign_by_arr_kernel<TF><<<ngrid, nblock>>>(a, nsize);
+        cuda_check_error();
+    }
+
     template<typename TF> __global__
-    void add_val(TF* __restrict__ a, const TF* const __restrict__ fld, int nsize, TF val)
+    void add_val_kernel(TF* __restrict__ a, const TF* const __restrict__ fld, int nsize, TF val)
     {
         const int n = blockIdx.x*blockDim.x + threadIdx.x;
 
         if (n < nsize)
             a[n] = fld[n] + val;
+    }
+
+    template<typename TF>
+    void add_val(TF* __restrict__ a, const TF* const __restrict__ fld, int nsize, TF val)
+    {
+        const int nblock = 256;
+        const int ngrid = nsize/nblock + (nsize%nblock > 0);
+        add_val_kernel<TF><<<ngrid, nblock>>>(a, fld, nsize, val);
+        cuda_check_error();
     }
 
     template<typename TF> __global__
@@ -288,7 +306,7 @@ namespace Tools_g
         }
     }
     template<typename TF> __global__
-    void subtract_profile(
+    void subtract_profile_kernel(
             TF* __restrict__ fld,
             TF* const __restrict__ profile,
             const int istart, const int iend,
@@ -307,6 +325,26 @@ namespace Tools_g
         }
     }
 
+    template<typename TF>
+    void subtract_profile(
+            TF* __restrict__ fld,
+            TF* const __restrict__ profile,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int kstart, const int kend,
+            const int icells, const int ijcells)
+    {
+        const int ni = iend - istart;
+        const int nj = jend - jstart;
+        const int nk = kend - kstart;
+        const int iblock = 16;
+        const int jblock = 16;
+        dim3 grid(ni/iblock + (ni%iblock > 0), nj/jblock + (nj%jblock > 0), nk);
+        dim3 block(iblock, jblock, 1);
+        subtract_profile_kernel<TF><<<grid, block>>>(fld, profile, istart, iend, jstart, jend, kstart, kend, icells, ijcells);
+        cuda_check_error();
+    }
+
 
     template<typename TF> __global__
     void copy(TF* __restrict__ dest, TF* __restrict__ src, const int nsize)
@@ -318,12 +356,21 @@ namespace Tools_g
     }
 
     template<typename TF> __global__
-    void raise_to_pow(TF* __restrict__ a, const int nsize, const int exponent)
+    void raise_to_pow_kernel(TF* __restrict__ a, const int nsize, const int exponent)
     {
         const int n = blockIdx.x*blockDim.x + threadIdx.x;
 
         if (n < nsize)
             a[n] = pow(a[n], exponent);
+    }
+
+    template<typename TF>
+    void raise_to_pow(TF* __restrict__ a, const int nsize, const int exponent)
+    {
+        const int nblock = 256;
+        const int ngrid = nsize/nblock + (nsize%nblock > 0);
+        raise_to_pow_kernel<TF><<<ngrid, nblock>>>(a, nsize, exponent);
+        cuda_check_error();
     }
 
 
@@ -441,7 +488,7 @@ namespace Tools_g
     }
 
     template<typename TF> __global__
-    void interpolate_2nd_g(TF*const  __restrict__ out, const TF* const __restrict__ in, const int iih, const int jjh, const int kkh, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int jj, const int kk)
+    void interpolate_2nd_g_kernel(TF*const  __restrict__ out, const TF* const __restrict__ in, const int iih, const int jjh, const int kkh, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int jj, const int kk)
     {
         // const int iih = 0;//(locin[0]-locout[0]);
         // const int jjh = 0;//(locin[1]-locout[1])*jj;
@@ -477,6 +524,20 @@ namespace Tools_g
         }
     }
 
+    template<typename TF>
+    void interpolate_2nd_g(TF*const __restrict__ out, const TF* const __restrict__ in, const int iih, const int jjh, const int kkh, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int jj, const int kk)
+    {
+        const int ni = iend - istart;
+        const int nj = jend - jstart;
+        const int nk = kend - kstart;
+        const int iblock = 16;
+        const int jblock = 16;
+        dim3 grid(ni/iblock + (ni%iblock > 0), nj/jblock + (nj%jblock > 0), nk);
+        dim3 block(iblock, jblock, 1);
+        interpolate_2nd_g_kernel<TF><<<grid, block>>>(out, in, iih, jjh, kkh, istart, iend, jstart, jend, kstart, kend, jj, kk);
+        cuda_check_error();
+    }
+
 }
 
 template void Tools_g::reduce_interior<double>(const double*, double*, int, int, int, int, int, int, int, int, int, int, Tools_g::Reduce_type);
@@ -491,18 +552,17 @@ template void Tools_g::mult_by_val<double>(double* __restrict__, int, double);
 template void Tools_g::mult_by_val<float>(float* __restrict__, int, float);
 template  __global__ void Tools_g::mult_by_arr(double* __restrict__, int, const double* const __restrict__);
 template  __global__ void Tools_g::mult_by_arr(float* __restrict__, int, const float* const  __restrict__);
-template  __global__ void Tools_g::sign_by_arr(double* __restrict__, int);
-template  __global__ void Tools_g::sign_by_arr(float* __restrict__, int);
-
-template __global__ void Tools_g::add_val(double* __restrict__ a, const double* const __restrict__ fld, int nsize, double val);
-template __global__ void Tools_g::add_val(float* __restrict__ a, const float* const __restrict__ fld, int nsize, float val);
+template void Tools_g::sign_by_arr<double>(double* __restrict__, int);
+template void Tools_g::sign_by_arr<float>(float* __restrict__, int);
+template void Tools_g::add_val<double>(double* __restrict__, const double* const __restrict__, int, double);
+template void Tools_g::add_val<float>(float* __restrict__, const float* const __restrict__, int, float);
 template __global__ void Tools_g::add_profile(double* __restrict__ fld, double* const  __restrict__ profile, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int icells, const int ijcells);
 template __global__ void Tools_g::add_profile(float* __restrict__ fld, float * const __restrict__ profile, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int icells, const int ijcells);
-template __global__ void Tools_g::subtract_profile(double* __restrict__ fld, double* const  __restrict__ profile, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int icells, const int ijcells);
-template __global__ void Tools_g::subtract_profile(float* __restrict__ fld, float * const __restrict__ profile, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int icells, const int ijcells);
+template void Tools_g::subtract_profile<double>(double* __restrict__, double* const __restrict__, const int, const int, const int, const int, const int, const int, const int, const int);
+template void Tools_g::subtract_profile<float>(float* __restrict__, float* const __restrict__, const int, const int, const int, const int, const int, const int, const int, const int);
 template __global__ void Tools_g::copy(double* __restrict__ dest, double* __restrict__ src, const int nsize);
 template __global__ void Tools_g::copy(float* __restrict__ dest, float* __restrict__ src, const int nsize);
-template __global__ void Tools_g::raise_to_pow(double* __restrict__ a, const int nsize, const int exponent);
-template __global__ void Tools_g::raise_to_pow(float* __restrict__ a, const int nsize, const int exponent);
-template  __global__ void Tools_g::interpolate_2nd_g(float* const  __restrict__ out, const float* const __restrict__ in, const int iih, const int jjh, const int kkh, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int jj, const int kk);
-template  __global__ void Tools_g::interpolate_2nd_g(double* const  __restrict__ out, const double* const __restrict__ in, const int iih, const int jjh, const int kkh, const int istart, const int iend, const int jstart, const int jend, const int kstart, const int kend, const int jj, const int kk);
+template void Tools_g::raise_to_pow<double>(double* __restrict__, const int, const int);
+template void Tools_g::raise_to_pow<float>(float* __restrict__, const int, const int);
+template void Tools_g::interpolate_2nd_g<float>(float* const __restrict__, const float* const __restrict__, const int, const int, const int, const int, const int, const int, const int, const int, const int, const int, const int);
+template void Tools_g::interpolate_2nd_g<double>(double* const __restrict__, const double* const __restrict__, const int, const int, const int, const int, const int, const int, const int, const int, const int, const int, const int);
