@@ -214,7 +214,12 @@ namespace Advec_monotonic
         const TF dxi = TF(1.)/dx;
         const TF dyi = TF(1.)/dy;
 
+        TF dzirhorefi;
+
         for (int k=kstart+2; k<kend-2; ++k)
+        {
+            dzirhorefi = dzi[k] / rhoref[k];
+
             for (int j=jstart; j<jend; ++j)
                 #pragma ivdep
                 for (int i=istart; i<iend; ++i)
@@ -228,10 +233,13 @@ namespace Advec_monotonic
                                - flux_lim(v[ijk    ], s[ijk-jj2], s[ijk-jj1], s[ijk    ], s[ijk+jj1]) ) * dyi
 
                              - ( rhorefh[k+1] * flux_lim(w[ijk+kk1], s[ijk-kk1], s[ijk    ], s[ijk+kk1], s[ijk+kk2])
-                               - rhorefh[k  ] * flux_lim(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) / rhoref[k] * dzi[k];
+                               - rhorefh[k  ] * flux_lim(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) * dzirhorefi;
                 }
+        }
 
         int k = kstart;
+        dzirhorefi = dzi[k] / rhoref[k];
+
         for (int j=jstart; j<jend; ++j)
             #pragma ivdep
             for (int i=istart; i<iend; ++i)
@@ -245,10 +253,12 @@ namespace Advec_monotonic
                            - flux_lim(v[ijk    ], s[ijk-jj2], s[ijk-jj1], s[ijk    ], s[ijk+jj1]) ) * dyi
 
                          // No flux through bottom wall.
-                         - ( rhorefh[k+1] * flux_lim_bot(w[ijk+kk1], s[ijk-kk1], s[ijk    ], s[ijk+kk1], s[ijk+kk2])) / rhoref[k] * dzi[k];
+                         - ( rhorefh[k+1] * flux_lim_bot(w[ijk+kk1], s[ijk-kk1], s[ijk    ], s[ijk+kk1], s[ijk+kk2])) * dzirhorefi;
             }
 
         k = kstart+1;
+        dzirhorefi = dzi[k] / rhoref[k];
+
         for (int j=jstart; j<jend; ++j)
             #pragma ivdep
             for (int i=istart; i<iend; ++i)
@@ -262,10 +272,12 @@ namespace Advec_monotonic
                            - flux_lim(v[ijk    ], s[ijk-jj2], s[ijk-jj1], s[ijk    ], s[ijk+jj1]) ) * dyi
 
                          - ( rhorefh[k+1] * flux_lim    (w[ijk+kk1], s[ijk-kk1], s[ijk    ], s[ijk+kk1], s[ijk+kk2])
-                           - rhorefh[k  ] * flux_lim_bot(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) / rhoref[k] * dzi[k];
+                           - rhorefh[k  ] * flux_lim_bot(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) * dzirhorefi;
             }
 
         k = kend-2;
+        dzirhorefi = dzi[k] / rhoref[k];
+
         for (int j=jstart; j<jend; ++j)
             #pragma ivdep
             for (int i=istart; i<iend; ++i)
@@ -280,10 +292,12 @@ namespace Advec_monotonic
 
                          // No flux through bottom wall.
                          - ( rhorefh[k+1] * flux_lim_top(w[ijk+kk1], s[ijk-kk1], s[ijk    ], s[ijk+kk1], s[ijk+kk2])
-                           - rhorefh[k  ] * flux_lim    (w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) / rhoref[k] * dzi[k];
+                           - rhorefh[k  ] * flux_lim    (w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) * dzirhorefi;
             }
 
         k = kend-1;
+        dzirhorefi = dzi[k] / rhoref[k];
+
         for (int j=jstart; j<jend; ++j)
             #pragma ivdep
             for (int i=istart; i<iend; ++i)
@@ -297,7 +311,7 @@ namespace Advec_monotonic
                            - flux_lim(v[ijk    ], s[ijk-jj2], s[ijk-jj1], s[ijk    ], s[ijk+jj1]) ) * dyi
 
                          - ( // No flux through boundary
-                           - rhorefh[k  ] * flux_lim_top(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) / rhoref[k] * dzi[k];
+                           - rhorefh[k  ] * flux_lim_top(w[ijk    ], s[ijk-kk2], s[ijk-kk1], s[ijk    ], s[ijk+kk1]) ) * dzirhorefi;
             }
     }
 
