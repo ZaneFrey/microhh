@@ -257,6 +257,7 @@ class Read_grid:
             self.prec = 'd'
         else:
             self.prec = 'f'
+        self.dtype = np.dtype('{}{}'.format(self.en, self.prec))
 
         self.fin = open(filename, 'rb')
 
@@ -281,11 +282,10 @@ class Read_grid:
         del self.fin
 
     def read(self, n):
-        return np.array(
-            st.unpack(
-                '{0}{1}{2}'.format(
-                    self.en, n, self.prec), self.fin.read(
-                    n * self.TF)))
+        data = np.fromfile(self.fin, dtype=self.dtype, count=n)
+        if data.size != n:
+            raise EOFError('Expected {} values from grid file, received {}'.format(n, data.size))
+        return data
 
 
 class Read_binary:
@@ -295,6 +295,7 @@ class Read_binary:
         self.en = grid.en
         self.prec = grid.prec
         self.TF = grid.TF
+        self.dtype = grid.dtype
 
         try:
             self.file = open(filename, 'rb')
@@ -305,11 +306,12 @@ class Read_binary:
         self.file.close()
 
     def read(self, n):
-        return np.array(
-            st.unpack(
-                '{0}{1}{2}'.format(
-                    self.en, n, self.prec), self.file.read(
-                    n * self.TF)))
+        data = np.fromfile(self.file, dtype=self.dtype, count=n)
+        if data.size != n:
+            raise EOFError(
+                'Expected {} values from {}, received {}'.format(
+                    n, self.file.name, data.size))
+        return data
 
 
 class Create_ncfile():
@@ -1055,4 +1057,3 @@ def copy_lsmfiles(srcdir = None, destdir = None, link = False):
         destdir = os.getcwd()
 
     copy_or_link(os.path.join(srcdir, 'van_genuchten_parameters.nc'), destdir, link = link)
-

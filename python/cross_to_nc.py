@@ -32,33 +32,133 @@ import platform
 if platform.system() == 'Darwin':
     set_start_method('fork')
 
+HALF_LEVEL_VARS = {'w', 'lflx', 'sflx'}
+
+
+def get_source_variable(variable):
+    if avg and not variable.endswith('_avg'):
+        return '{0}_avg'.format(variable)
+    else:
+        return variable
+
+
+def get_base_variable(variable):
+    if variable.endswith('_avg'):
+        return variable[:-4]
+    else:
+        return variable
+
+
+def get_halflevel(variable):
+    base_variable = get_base_variable(variable)
+    return ''.join([
+        '1' if base_variable == 'u' else '0',
+        '1' if base_variable == 'v' else '0',
+        '1' if base_variable in HALF_LEVEL_VARS else '0'])
+
+
+def get_vertical_coordinate(variable):
+    if get_halflevel(variable)[2] == '1':
+        return grid.dim['zh'][:-1]
+    else:
+        return grid.dim['z']
+
+
+def get_cross_coordinate(mode, variable):
+    halflevel = get_halflevel(variable)
+
+    if mode == 'xy':
+        return get_vertical_coordinate(variable)
+    elif mode == 'xz':
+        return grid.dim['yh'] if halflevel[1] == '1' else grid.dim['y']
+    elif mode == 'yz':
+        return grid.dim['xh'] if halflevel[0] == '1' else grid.dim['x']
+    else:
+        raise ValueError('Unsupported mode {}'.format(mode))
+
+
+def get_average_indexes(mode, variable):
+    if indexes is not None:
+        return indexes
+
+    values = nl['cross'][mode]
+    values = [values] if not isinstance(values, list) else values
+    coordinate = get_cross_coordinate(mode, variable)
+
+    return [int(np.abs(coordinate - value).argmin()) for value in values]
+
+
+def get_first_available_time(variables):
+    first_otimes = []
+
+    for variable in variables:
+        files = glob.glob('{0}.[0-9]*'.format(get_source_variable(variable)))
+        if len(files) == 0:
+            raise Exception('Cannot find any average files for {0}'.format(variable))
+
+        otimes = [int(os.path.basename(f).split('.')[-1]) for f in files]
+        first_otimes.append(min(otimes))
+
+    return max(first_otimes) * 10**iotimeprec
+
+
+def _build_time_otime_pairs(starttime, endtime, sampletime, iotimeprec):
+    scale = 10**iotimeprec
+    times = np.arange(starttime, endtime + sampletime, sampletime)
+    return [(time, int(round(time / scale))) for time in times]
+
+
+def _cross_section_shape(mode, at_surface):
+    if at_surface or mode == 'xy':
+        return (jtot, itot)
+    if mode == 'xz':
+        return (ktot, itot)
+    return (ktot, jtot)
+
+
+def _time_block_shape(mode, nindices, at_surface):
+    if at_surface:
+        return (jtot, itot)
+    if mode == 'xy':
+        return (nindices, jtot, itot)
+    if mode == 'xz':
+        return (ktot, nindices, itot)
+    return (ktot, jtot, nindices)
+
+
 def convert_to_nc(variables):
     # Loop over the different variables and crosssections
     for variable in variables:
+        source_variable = get_source_variable(variable)
         for mode in modes:
+            filename = "{0}.{1}.nc".format(source_variable, mode)
             try:
-                otime = int(round(starttime / 10**iotimeprec))
+                otime = time_otime_pairs[0][1]
 
-                if os.path.isfile("{0}.xy.000.{1:07d}".format(variable, otime)):
-                    if mode != 'xy':
-                        continue
-                    at_surface = True
-                else:
+                if avg:
                     at_surface = False
-
-                filename = "{0}.{1}.nc".format(variable, mode)
-                halflevel = '000'
-                if not at_surface:
-                    if indexes is None:
-                        indexes_local,halflevel = mht.get_cross_indices(variable, mode)
+                    halflevel = get_halflevel(source_variable)
+                    indexes_local = get_average_indexes(mode, source_variable)
+                else:
+                    if os.path.isfile("{0}.xy.000.{1:07d}".format(source_variable, otime)):
+                        if mode != 'xy':
+                            continue
+                        at_surface = True
                     else:
-                        indexes_local = indexes
+                        at_surface = False
 
-                        files = glob.glob("{0:}.{1}.*.{2:05d}.{3:07d}".format(
-                                variable, mode, indexes_local[0], otime))
-                        if len(files) == 0:
-                            raise Exception('Cannot find any cross-section')
-                        halflevel = files[0].split('.')[-3]
+                    halflevel = '000'
+                    if not at_surface:
+                        if indexes is None:
+                            indexes_local,halflevel = mht.get_cross_indices(source_variable, mode)
+                        else:
+                            indexes_local = indexes
+
+                            files = glob.glob("{0:}.{1}.*.{2:05d}.{3:07d}".format(
+                                    source_variable, mode, indexes_local[0], otime))
+                            if len(files) == 0:
+                                raise Exception('Cannot find any cross-section')
+                            halflevel = files[0].split('.')[-3]
 
                 dim = collections.OrderedDict()
                 dim['time'] = []
@@ -80,6 +180,9 @@ def convert_to_nc(variables):
                     dim.update({'x': []})
                     n = ktot * jtot
 
+                section_shape = _cross_section_shape(mode, at_surface)
+                block_shape = _time_block_shape(mode, len(indexes_local), at_surface)
+
                 if halflevel[0] == '1':
                     dim['xh'] = dim.pop('x')
                 if halflevel[1] == '1':
@@ -87,7 +190,7 @@ def convert_to_nc(variables):
                 if halflevel[2] == '1':
                     dim['zh'] = dim.pop('z')
                 ncfile = mht.Create_ncfile(
-                    grid, filename, variable, dim, precision, compression)
+                    grid, filename, source_variable, dim, precision, compression)
                 
                 for key, val in dim.items():
                     if key == 'time':
@@ -95,40 +198,84 @@ def convert_to_nc(variables):
                     elif val == []:
                         ncfile.dimvar[key][:] = grid.dim[key][indexes_local]
 
-                for t, time in enumerate(np.arange(starttime, endtime + sampletime, sampletime)):
-                    for k in range(len(indexes_local)):
-                        index = indexes_local[k]
-                        otime = int(
-                            round(
-                                (time) / 10**iotimeprec))
-                        if at_surface:
-                            f_in = "{0}.{1}.{2}.{3:07d}".format(
-                                variable, mode, halflevel, otime)
-                        else:
-                            f_in = "{0:}.{1}.{2}.{3:05d}.{4:07d}".format(
-                                variable, mode, halflevel, index, otime)
+                for t, (time, otime) in enumerate(time_otime_pairs):
+                    if avg:
+                        f_in = "{0:}.{1:07d}".format(source_variable, otime)
+                        try:
+                            fin = mht.Read_binary(grid, f_in)
+                        except Exception as ex:
+                            print(ex)
+                            continue
+
+                        print("Processing %8s, time=%7i" % (source_variable, otime))
+
+                        field = fin.read(itot * jtot * ktot).reshape((ktot, jtot, itot))
+                        time_block = np.empty(block_shape, dtype=grid.dtype)
+
+                        for k, index in enumerate(indexes_local):
+                            if mode == 'xy':
+                                time_block[k, :, :] = field[index, :, :]
+                            elif mode == 'xz':
+                                time_block[:, k, :] = field[:, index, :]
+                            elif mode == 'yz':
+                                time_block[:, :, k] = field[:, :, index]
+
+                        ncfile.dimvar['time'][t] = time
+                        ncfile.var[t, ...] = time_block
+                        fin.close()
+                        continue
+
+                    if at_surface:
+                        f_in = "{0}.{1}.{2}.{3:07d}".format(
+                            source_variable, mode, halflevel, otime)
                         try:
                             fin = mht.Read_binary(grid, f_in)
                         except Exception as ex:
                             print (ex)
+                            continue
+
+                        print(
+                            "Processing %8s, time=%7i, index=%4i" %
+                            (source_variable, otime, -1))
+
+                        ncfile.dimvar['time'][t] = time
+                        ncfile.var[t, :, :] = fin.read(n).reshape(section_shape)
+                        fin.close()
+                        continue
+
+                    time_block = np.empty(block_shape, dtype=grid.dtype)
+                    missing_file = False
+
+                    for k in range(len(indexes_local)):
+                        index = indexes_local[k]
+                        f_in = "{0:}.{1}.{2}.{3:05d}.{4:07d}".format(
+                            source_variable, mode, halflevel, index, otime)
+                        try:
+                            fin = mht.Read_binary(grid, f_in)
+                        except Exception as ex:
+                            print (ex)
+                            missing_file = True
                             break
 
                         print(
                             "Processing %8s, time=%7i, index=%4i" %
-                            (variable, otime, index))
+                            (source_variable, otime, index))
 
-                        ncfile.dimvar['time'][t] = time
-
-                        if at_surface:
-                            ncfile.var[t, :, :] = fin.read(n)
-                        elif mode == 'xy':
-                            ncfile.var[t, k, :, :] = fin.read(n)
+                        data = fin.read(n).reshape(section_shape)
+                        if mode == 'xy':
+                            time_block[k, :, :] = data
                         elif mode == 'xz':
-                            ncfile.var[t, :, k, :] = fin.read(n)
+                            time_block[:, k, :] = data
                         elif mode == 'yz':
-                            ncfile.var[t, :, :, k] = fin.read(n)
+                            time_block[:, :, k] = data
 
                         fin.close()
+
+                    if missing_file:
+                        continue
+
+                    ncfile.dimvar['time'][t] = time
+                    ncfile.var[t, ...] = time_block
                 ncfile.close()
 
             except Exception as ex:
@@ -182,6 +329,10 @@ parser.add_argument(
     help='order',
     choices=[
         2, 4], type = int)
+parser.add_argument(
+    '--avg',
+    help='target running-average 3D fields',
+    action='store_true')
 
 args = parser.parse_args()
 
@@ -200,8 +351,14 @@ starttime = float(
     args.starttime) if args.starttime is not None else nl['time']['starttime']
 endtime = float(
     args.endtime) if args.endtime is not None else nl['time']['endtime']
-sampletime = float(
-    args.sampletime) if args.sampletime is not None else nl['cross']['sampletime']
+avg = args.avg
+if avg:
+    starttime = float(args.starttime) if args.starttime is not None else nl['average'].get('starttime', 0.)
+    sampletime = float(
+        args.sampletime) if args.sampletime is not None else nl['average']['sampletime']
+else:
+    sampletime = float(
+        args.sampletime) if args.sampletime is not None else nl['cross']['sampletime']
 
 if args.modes is None:
     modes = list(nl['cross'].keys() & cross_modes)
@@ -220,10 +377,14 @@ if 'iotimeprec' in nl['time']:
 else:
     iotimeprec = 0.
 
-variables = args.vars if args.vars is not None else nl['cross']['crosslist']
+variables = args.vars if args.vars is not None else (
+        nl['average']['averagelist'] if avg else nl['cross']['crosslist'])
 
 # In case variables is a single string, convert to list.
 variables = [ variables ] if not isinstance(variables, list) else variables
+
+if avg and args.starttime is None:
+    starttime = get_first_available_time(variables)
 
 precision = args.precision
 nprocs = args.nprocs if args.nprocs is not None else len(variables)
@@ -235,12 +396,14 @@ except KeyError:
 
 # End option parsing
 grid = mht.Read_grid(itot, jtot, ktot, order = order)
+time_otime_pairs = _build_time_otime_pairs(starttime, endtime, sampletime, iotimeprec)
 
 chunks = [variables[i::nprocs] for i in range(nprocs)]
 
 pool = Pool(processes=nprocs)
 
-pool.imap_unordered(convert_to_nc, chunks)
+for _ in pool.imap_unordered(convert_to_nc, chunks):
+    pass
 
 pool.close()
 pool.join()

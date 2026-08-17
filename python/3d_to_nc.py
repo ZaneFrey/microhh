@@ -29,25 +29,49 @@ import time as tm
 import numpy as np
 from multiprocessing import Pool
 
-def convert_to_nc(variables):
-    half_level_vars = ['w', 'lflx', 'sflx']
-    
+HALF_LEVEL_VARS = ['w', 'lflx', 'sflx']
+
+
+def get_source_variable(variable):
+    if avg and not variable.endswith('_avg'):
+        return '{0}_avg'.format(variable)
+    else:
+        return variable
+
+
+def get_first_available_time(variables):
+    first_otimes = []
+
     for variable in variables:
-        filename = "{0}.nc".format(variable)
+        files = glob.glob('{0}.[0-9]*'.format(get_source_variable(variable)))
+        if len(files) == 0:
+            raise Exception('Cannot find any average files for {0}'.format(variable))
+
+        otimes = [int(os.path.basename(f).split('.')[-1]) for f in files]
+        first_otimes.append(min(otimes))
+
+    return max(first_otimes) * 10**iotimeprec
+
+
+def convert_to_nc(variables):
+    for variable in variables:
+        source_variable = get_source_variable(variable)
+        filename = "{0}.nc".format(source_variable)
         dim = {
             'time': [],
             'z': range(kmax),
             'y': range(jtot),
             'x': range(itot)}
-        if variable == 'u':
+        base_variable = source_variable[:-4] if source_variable.endswith('_avg') else source_variable
+        if base_variable == 'u':
             dim['xh'] = dim.pop('x')
-        if variable == 'v':
+        if base_variable == 'v':
             dim['yh'] = dim.pop('y')
-        if variable in half_level_vars:
+        if base_variable in HALF_LEVEL_VARS:
             dim['zh'] = dim.pop('z')
         try:
             def convert(otime, tout):
-                f_in = "{0:}.{1:07d}".format(variable, otime)
+                f_in = "{0:}.{1:07d}".format(source_variable, otime)
                 try:
                     fin = mht.Read_binary(grid, f_in)
                 except Exception as ex:
@@ -55,7 +79,7 @@ def convert_to_nc(variables):
                     return
                 # raise Exception(
                 #         'Stopping: cannot find file {}'.format(f_in))
-                print("Processing %8s, time=%7i" % (variable, otime))
+                print("Processing %8s, time=%7i" % (source_variable, otime))
                 ncfile.dimvar['time'][tout] = otime * 10**iotimeprec
                 if (perslice):
                     for k in range(kmax):
@@ -66,7 +90,7 @@ def convert_to_nc(variables):
                 fin.close()
 
             ncfile = mht.Create_ncfile(
-                grid, filename, variable, dim, precision, compression)
+                grid, filename, source_variable, dim, precision, compression)
             # Loop through the files and read 3d field
             tout = 0
             for t, time in enumerate(np.arange(starttime, endtime + sampletime, sampletime)):
@@ -138,6 +162,10 @@ parser.add_argument(
     '--kmax',
     help='reduce vertical extent 3D files',
     type=int)
+parser.add_argument(
+    '--avg',
+    help='target running-average 3D fields',
+    action='store_true')
 
 parser.add_argument('-n', '--nprocs', help='Number of processes', type=int)
 
@@ -155,9 +183,14 @@ kmax = min(kmax, ktot)
 
 starttime = args.starttime if args.starttime is not None else nl['time']['starttime']
 endtime = args.endtime if args.endtime is not None else nl['time']['endtime']
-sampletime = args.sampletime if args.sampletime is not None else nl['dump']['sampletime']
+avg = args.avg
+if avg:
+    starttime = args.starttime if args.starttime is not None else nl['average'].get('starttime', 0.)
+    sampletime = args.sampletime if args.sampletime is not None else nl['average']['sampletime']
+else:
+    sampletime = args.sampletime if args.sampletime is not None else nl['dump']['sampletime']
 try:
-    doubledump = (nl['dump']['swdoubledump']==1)
+    doubledump = (nl['dump']['swdoubledump']==1) and not avg
 except:
     doubledump = False
 
@@ -166,9 +199,13 @@ try:
 except KeyError:
     iotimeprec = 0.
 
-variables = args.vars if args.vars is not None else nl['dump']['dumplist']
+variables = args.vars if args.vars is not None else (
+        nl['average']['averagelist'] if avg else nl['dump']['dumplist'])
 if isinstance(variables, str):
     variables = [variables]
+
+if avg and args.starttime is None:
+    starttime = get_first_available_time(variables)
 
 precision = args.precision
 perslice = args.perslice
@@ -183,7 +220,8 @@ except KeyError:
 # Calculate the number of iterations
 for time in np.arange(starttime, endtime, sampletime):
     otime = int(round(time / 10**iotimeprec))
-    if not glob.glob('*.{0:07d}'.format(otime)):
+    source_variables = [get_source_variable(variable) for variable in variables]
+    if not any(glob.glob('{0}.{1:07d}'.format(variable, otime)) for variable in source_variables):
         endtime = time - sampletime
         break
 
