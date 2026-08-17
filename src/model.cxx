@@ -54,10 +54,12 @@
 #include "column.h"
 #include "cross.h"
 #include "dump.h"
+#include "average.h"
 #include "model.h"
 #include "source.h"
 #include "aerosol.h"
 #include "background_profs.h"
+#include "canopy.h"
 
 #ifdef USECUDA
 #include <cuda_runtime_api.h>
@@ -147,6 +149,9 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
 
+
+        canopy    = std::make_shared<Canopy<TF>>(master, *grid, *fields, *input);
+
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
         windfarm  = std::make_shared<WindFarm<TF>>(master, *grid, *fields, *input,
                 ib->get_switch() == IB_type::DEM);
@@ -154,6 +159,7 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
         stats     = std::make_shared<Stats <TF>>(master, *grid, *soil_grid, *background, *fields, *advec, *diff, *input);
         column    = std::make_shared<Column<TF>>(master, *grid, *fields, *input);
         dump      = std::make_shared<Dump  <TF>>(master, *grid, *fields, *input);
+        average   = std::make_shared<Average<TF>>(master, *grid, *dump, *input);
         cross     = std::make_shared<Cross <TF>>(master, *grid, *soil_grid, *fields, *input);
 
         budget    = Budget<TF>::factory(master, *grid, *fields, *thermo, *diff, *advec, *force, *stats, *input);
@@ -196,7 +202,7 @@ void Model<TF>::init()
         throw std::runtime_error("swdiff=amd2 does not support active immersed boundaries; disable [IB] sw_immersed_boundary");
 
     diff->register_fields();
-    fields->init(*input, *dump, *cross, sim_mode);
+    fields->init(*input, *dump, *average, *cross, sim_mode);
 
     fft->init();
 
@@ -214,6 +220,7 @@ void Model<TF>::init()
     decay->init(*input);
     budget->init();
     source->init();
+    canopy->init();
     aerosol->init();
     background->init(*input_nc);
 
@@ -221,6 +228,7 @@ void Model<TF>::init()
     column->init();
     cross->init();
     dump->init();
+    average->init();
 }
 
 template<typename TF>
@@ -269,7 +277,7 @@ void Model<TF>::load()
 
     grid->create_stats(*stats);
 
-    thermo->create(*input, *input_nc, *stats, *column, *cross, *dump, *timeloop);
+    thermo->create(*input, *input_nc, *stats, *column, *cross, *dump, *average, *timeloop);
     thermo->load(timeloop->get_iotime());
 
     boundary->load(timeloop->get_iotime(), *thermo);
@@ -283,6 +291,7 @@ void Model<TF>::load()
     source->create(*input, *input_nc);
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
+    canopy->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
 
     microphys->create(*input, *input_nc, *stats, *cross, *dump, *column);
@@ -297,6 +306,10 @@ void Model<TF>::load()
     // variables are legal as a cross/dump.
     cross->create();
     dump->create();
+    average->create();
+
+    if (sim_mode == Sim_mode::Run)
+        average->load(timeloop->get_iotime(), timeloop->get_itime());
 
     pres->set_values();
     pres->create(*stats);
@@ -439,6 +452,9 @@ void Model<TF>::exec()
                 // Gravitational settling of binned dust types.
                 particle_bin->exec(*stats);
 
+                // Canopy drag.
+                canopy->exec();
+
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);
 
@@ -543,6 +559,17 @@ void Model<TF>::exec()
                     cpu_up_to_date = false;
                     #endif
 
+                    if (average->get_switch() && average->has_fields())
+                    {
+                        if (average->has_started(timeloop->get_itime()))
+                        {
+                            fields->exec_average(*average, timeloop->get_dt());
+                            thermo->exec_average(*average, timeloop->get_dt());
+                        }
+
+                        average->finish_step(timeloop->get_dt(), timeloop->get_itime(), timeloop->get_iotime());
+                    }
+
                     // Save the data for restarts.
                     if (timeloop->do_save())
                     {
@@ -569,6 +596,7 @@ void Model<TF>::exec()
                         // leading to restart failures.
                         thermo->save(iotime);
                         windfarm->save(iotime);
+                        average->save(iotime);
 
                         #pragma omp task default(shared)
                         {
@@ -636,6 +664,8 @@ void Model<TF>::prepare_gpu()
     microphys->prepare_device();
     radiation->prepare_device();
     column   ->prepare_device();
+    average  ->prepare_device();
+    canopy   ->prepare_device();
     aerosol  ->prepare_device();
     // Prepare pressure last, for memory check
     pres     ->prepare_device();
@@ -657,6 +687,8 @@ void Model<TF>::clear_gpu()
     microphys->clear_device();
     radiation->clear_device();
     column   ->clear_device();
+    average  ->clear_device();
+    canopy   ->clear_device();
     aerosol  ->clear_device();
 
     // Clear pressure last, for memory check
@@ -819,6 +851,7 @@ void Model<TF>::set_time_step()
     timeloop->set_time_step_limit(stats        ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(cross        ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(dump         ->get_time_limit(timeloop->get_itime()));
+    timeloop->set_time_step_limit(average      ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(column       ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(windfarm     ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(particle_bin->get_time_limit());
