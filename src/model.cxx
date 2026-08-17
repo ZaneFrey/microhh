@@ -53,12 +53,12 @@
 #include "column.h"
 #include "cross.h"
 #include "dump.h"
+#include "average.h"
 #include "model.h"
 #include "source.h"
 #include "aerosol.h"
 #include "background_profs.h"
-#include "dragdisk.h"
-#include "turbine.h"
+#include "canopy.h"
 
 #ifdef USECUDA
 #include <cuda_runtime_api.h>
@@ -148,14 +148,15 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
 
-        dragdisk  = std::make_shared<DragDisk<TF>>(master, *grid, *fields, *input);
-        turbine   = std::make_shared<Turbine<TF>>(master, *grid, *fields, *input);
+
+        canopy    = std::make_shared<Canopy<TF>>(master, *grid, *fields, *input);
 
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
 
         stats     = std::make_shared<Stats <TF>>(master, *grid, *soil_grid, *background, *fields, *advec, *diff, *input);
         column    = std::make_shared<Column<TF>>(master, *grid, *fields, *input);
         dump      = std::make_shared<Dump  <TF>>(master, *grid, *fields, *input);
+        average   = std::make_shared<Average<TF>>(master, *grid, *dump, *input);
         cross     = std::make_shared<Cross <TF>>(master, *grid, *soil_grid, *fields, *input);
 
         budget    = Budget<TF>::factory(master, *grid, *fields, *thermo, *diff, *advec, *force, *stats, *input);
@@ -193,7 +194,7 @@ void Model<TF>::init()
 
     grid->init();
     soil_grid->init();
-    fields->init(*input, *dump, *cross, sim_mode);
+    fields->init(*input, *dump, *average, *cross, sim_mode);
 
     fft->init();
 
@@ -209,8 +210,7 @@ void Model<TF>::init()
     decay->init(*input);
     budget->init();
     source->init();
-    dragdisk->init();
-    turbine->init();
+    canopy->init();
     aerosol->init();
     background->init(*input_nc);
 
@@ -218,6 +218,7 @@ void Model<TF>::init()
     column->init();
     cross->init();
     dump->init();
+    average->init();
 }
 
 template<typename TF>
@@ -266,7 +267,7 @@ void Model<TF>::load()
 
     grid->create_stats(*stats);
 
-    thermo->create(*input, *input_nc, *stats, *column, *cross, *dump, *timeloop);
+    thermo->create(*input, *input_nc, *stats, *column, *cross, *dump, *average, *timeloop);
     thermo->load(timeloop->get_iotime());
 
     boundary->load(timeloop->get_iotime(), *thermo);
@@ -279,8 +280,7 @@ void Model<TF>::load()
     source->create(*input, *input_nc);
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
-    dragdisk->create(*input, *stats);
-    turbine->create(*input, *stats);
+    canopy->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
 
 
@@ -296,6 +296,10 @@ void Model<TF>::load()
     // variables are legal as a cross/dump.
     cross->create();
     dump->create();
+    average->create();
+
+    if (sim_mode == Sim_mode::Run)
+        average->load(timeloop->get_iotime(), timeloop->get_itime());
 
     pres->set_values();
     pres->create(*stats);
@@ -435,12 +439,8 @@ void Model<TF>::exec()
                 // Gravitational settling of binned dust types.
                 particle_bin->exec(*stats);
 
-                // Apply drag disk forcing
-                dragdisk->exec(*stats);
-
-                // Apply turbine (actuator disk) forcing
-                if (turbine->is_active(static_cast<TF>(timeloop->get_time())))
-                    turbine->exec(timeloop->get_sub_time_step(), *stats);
+                // Canopy drag.
+                canopy->exec();
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);
@@ -526,6 +526,17 @@ void Model<TF>::exec()
                     cpu_up_to_date = false;
                     #endif
 
+                    if (average->get_switch() && average->has_fields())
+                    {
+                        if (average->has_started(timeloop->get_itime()))
+                        {
+                            fields->exec_average(*average, timeloop->get_dt());
+                            thermo->exec_average(*average, timeloop->get_dt());
+                        }
+
+                        average->finish_step(timeloop->get_dt(), timeloop->get_itime(), timeloop->get_iotime());
+                    }
+
                     // Save the data for restarts.
                     if (timeloop->do_save())
                     {
@@ -551,6 +562,7 @@ void Model<TF>::exec()
                         // Save the thermo before the split of the thread, to avoid overwrite during stats
                         // leading to restart failures.
                         thermo->save(iotime);
+                        average->save(iotime);
 
                         #pragma omp task default(shared)
                         {
@@ -615,8 +627,8 @@ void Model<TF>::prepare_gpu()
     microphys->prepare_device();
     radiation->prepare_device();
     column   ->prepare_device();
-    dragdisk ->prepare_device();
-    turbine  ->prepare_device();
+    average  ->prepare_device();
+    canopy   ->prepare_device();
     aerosol  ->prepare_device();
     // Prepare pressure last, for memory check
     pres     ->prepare_device();
@@ -637,8 +649,8 @@ void Model<TF>::clear_gpu()
     microphys->clear_device();
     radiation->clear_device();
     column   ->clear_device();
-    dragdisk ->clear_device();
-    turbine  ->clear_device();
+    average  ->clear_device();
+    canopy   ->clear_device();
     aerosol  ->clear_device();
 
     // Clear pressure last, for memory check
@@ -799,6 +811,7 @@ void Model<TF>::set_time_step()
     timeloop->set_time_step_limit(stats        ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(cross        ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(dump         ->get_time_limit(timeloop->get_itime()));
+    timeloop->set_time_step_limit(average      ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(column       ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(particle_bin->get_time_limit());
 
