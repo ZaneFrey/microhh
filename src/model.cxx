@@ -57,8 +57,6 @@
 #include "source.h"
 #include "aerosol.h"
 #include "background_profs.h"
-#include "dragdisk.h"
-#include "turbine.h"
 
 #ifdef USECUDA
 #include <cuda_runtime_api.h>
@@ -148,9 +146,6 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
 
-        dragdisk  = std::make_shared<DragDisk<TF>>(master, *grid, *fields, *input);
-        turbine   = std::make_shared<Turbine<TF>>(master, *grid, *fields, *input);
-
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
 
         stats     = std::make_shared<Stats <TF>>(master, *grid, *soil_grid, *background, *fields, *advec, *diff, *input);
@@ -209,8 +204,6 @@ void Model<TF>::init()
     decay->init(*input);
     budget->init();
     source->init();
-    dragdisk->init();
-    turbine->init();
     aerosol->init();
     background->init(*input_nc);
 
@@ -279,8 +272,6 @@ void Model<TF>::load()
     source->create(*input, *input_nc);
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
-    dragdisk->create(*input, *stats);
-    turbine->create(*input, *stats);
     background->create(*input, *input_nc, *stats);
 
 
@@ -434,9 +425,6 @@ void Model<TF>::exec()
 
                 // Gravitational settling of binned dust types.
                 particle_bin->exec(*stats);
-
-                // Apply drag disk forcing
-                dragdisk->exec(*stats);
 
                 // Apply turbine (actuator disk) forcing
                 if (turbine->is_active(static_cast<TF>(timeloop->get_time())))
@@ -615,8 +603,6 @@ void Model<TF>::prepare_gpu()
     microphys->prepare_device();
     radiation->prepare_device();
     column   ->prepare_device();
-    dragdisk ->prepare_device();
-    turbine  ->prepare_device();
     aerosol  ->prepare_device();
     // Prepare pressure last, for memory check
     pres     ->prepare_device();
@@ -637,8 +623,6 @@ void Model<TF>::clear_gpu()
     microphys->clear_device();
     radiation->clear_device();
     column   ->clear_device();
-    dragdisk ->clear_device();
-    turbine  ->clear_device();
     aerosol  ->clear_device();
 
     // Clear pressure last, for memory check
