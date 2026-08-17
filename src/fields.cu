@@ -31,6 +31,7 @@
 #include "soil_grid.h"
 #include "master.h"
 #include "column.h"
+#include "average.h"
 #include "constants.h"
 #include "tools.h"
 #include "fast_math.h"
@@ -644,6 +645,15 @@ void Fields<TF>::exec_column(Column<TF>& column)
     }
 
     column.calc_column("p", sd.at("p")->fld_g, no_offset);
+}
+#endif
+
+#ifdef USECUDA
+template<typename TF>
+void Fields<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    for (auto& it : averagelist_local)
+        average.accumulate_g(it, a.at(it)->fld_g, TF(dt));
 }
 #endif
 

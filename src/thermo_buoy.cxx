@@ -337,7 +337,7 @@ Thermo_buoy<TF>::~Thermo_buoy()
 template<typename TF>
 void Thermo_buoy<TF>::create(
         Input& inputin, Netcdf_handle& input_nc, Stats<TF>& stats,
-        Column<TF>& column, Cross<TF>& cross, Dump<TF>& dump, Timeloop<TF>& timeloop)
+        Column<TF>& column, Cross<TF>& cross, Dump<TF>& dump, Average<TF>& average, Timeloop<TF>& timeloop)
 {
     stats.add_tendency(*fields.mt.at("w"), "zh", tend_name, tend_longname);
 }

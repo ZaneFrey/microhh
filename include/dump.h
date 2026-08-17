@@ -23,6 +23,11 @@
 #ifndef DUMP_H
 #define DUMP_H
 
+#include <string>
+#include <vector>
+
+#include "field3d_io.h"
+
 class Master;
 class Input;
 template<typename> class Grid;
@@ -44,6 +49,8 @@ class Dump
 
         bool do_dump(unsigned long, unsigned long);
         void save_dump(TF*, const std::string&, int);
+        void save_data(TF*, const std::string&, int);
+        void load_data(TF*, const std::string&, int);
 
     private:
         Master& master;

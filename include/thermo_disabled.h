@@ -34,6 +34,7 @@ template<typename> class Stats;
 template<typename> class Diff;
 template<typename> class Column;
 template<typename> class Dump;
+template<typename> class Average;
 template<typename> class Cross;
 template<typename> class Field3d;
 template<typename> class Thermo;
@@ -53,7 +54,7 @@ class Thermo_disabled : public Thermo<TF>
 
         // Interfacing functions to get buoyancy properties from other classes.
         void init() {};
-        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Timeloop<TF>&) {};
+        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Average<TF>&, Timeloop<TF>&) {};
         void create_basestate(Input&, Netcdf_handle&, Timeloop<TF>&) {};
         void load(const int) {};
         void save(const int) {};
@@ -63,6 +64,7 @@ class Thermo_disabled : public Thermo<TF>
         void exec_stats(Stats<TF>&) {};
         void exec_column(Column<TF>&) {};
         void exec_dump(Dump<TF>&, unsigned long) {};
+        void exec_average(Average<TF>&, const double) {};
         void exec_cross(Cross<TF>&, unsigned long) {};
         void get_mask(Stats<TF>&, std::string) {};
         bool has_mask(std::string) {return false;};

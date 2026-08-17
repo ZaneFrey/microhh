@@ -37,6 +37,7 @@
 #include "cross.h"
 #include "column.h"
 #include "dump.h"
+#include "average.h"
 
 #include "thermo_dry.h"
 #include "thermo_moist_functions.h"  // For Exner function
@@ -585,8 +586,8 @@ void Thermo_dry<TF>::create_basestate(
 
 template<typename TF>
 void Thermo_dry<TF>::create(
-        Input& inputin, Netcdf_handle& input_nc, Stats<TF>& stats,
-        Column<TF>& column, Cross<TF>& cross, Dump<TF>& dump, Timeloop<TF>& timeloop)
+        Input& inputin, Netcdf_handle& input_nc, Stats<TF>& stats, Column<TF>& column,
+        Cross<TF>& cross, Dump<TF>& dump, Average<TF>& average, Timeloop<TF>& timeloop)
 {
     auto& gd = grid.get_grid_data();
     fields.set_calc_mean_profs(true);
@@ -602,6 +603,7 @@ void Thermo_dry<TF>::create(
     // create_stats(stats);
     create_column(column);
     create_dump(dump);
+    create_average(average);
     create_cross(cross);
 }
 
@@ -890,6 +892,34 @@ void Thermo_dry<TF>::create_dump(Dump<TF>& dump)
 }
 
 template<typename TF>
+void Thermo_dry<TF>::create_average(Average<TF>& average)
+{
+    if (average.get_switch())
+    {
+        std::vector<std::string>& averagelist_global = average.get_averagelist();
+        auto averagevar = averagelist_global.begin();
+
+        while (averagevar != averagelist_global.end())
+        {
+            if (check_field_exists(*averagevar))
+            {
+                if (std::find(averagelist.begin(), averagelist.end(), *averagevar) == averagelist.end())
+                {
+                    averagelist.push_back(*averagevar);
+                    average.add_field(*averagevar);
+                }
+
+                averagevar = averagelist_global.erase(averagevar);
+            }
+            else
+            {
+                ++averagevar;
+            }
+        }
+    }
+}
+
+template<typename TF>
 void Thermo_dry<TF>::create_cross(Cross<TF>& cross)
 {
     if (cross.get_switch())
@@ -974,6 +1004,26 @@ void Thermo_dry<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime)
 }
 
 #ifndef USECUDA
+template<typename TF>
+void Thermo_dry<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    auto output = fields.get_tmp();
+
+    for (auto& it : averagelist)
+    {
+        if (it == "b")
+            get_thermo_field(*output, "b", false, true);
+        else if (it == "T")
+            get_thermo_field(*output, "T", false, true);
+        else
+            throw std::runtime_error("Thermo average field not supported");
+
+        average.accumulate(it, output->fld.data(), TF(dt));
+    }
+
+    fields.release_tmp(output);
+}
+
 template<typename TF>
 void Thermo_dry<TF>::exec_column(Column<TF>& column)
 {
