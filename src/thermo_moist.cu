@@ -30,6 +30,7 @@
 #include "master.h"
 #include "tools.h"
 #include "column.h"
+#include "average.h"
 #include "stats.h"
 #include "thermo_moist_functions.h"
 #include <iostream>
@@ -1261,6 +1262,26 @@ void Thermo_moist<TF>::exec_column(Column<TF>& column)
     // Time series
     column.calc_time_series("thl_bot", fields.ap.at("thl")->fld_bot_g, no_offset);
     column.calc_time_series("qt_bot",  fields.ap.at("qt")->fld_bot_g,  no_offset);
+
+    fields.release_tmp_g(output);
+}
+#endif
+
+#ifdef USECUDA
+template<typename TF>
+void Thermo_moist<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    auto output = fields.get_tmp_g();
+
+    for (auto& it : averagelist)
+    {
+        if (check_field_exists(it))
+            get_thermo_field_g(*output, it, false);
+        else
+            throw std::runtime_error("Thermo average field not supported");
+
+        average.accumulate_g(it, output->fld_g, TF(dt));
+    }
 
     fields.release_tmp_g(output);
 }

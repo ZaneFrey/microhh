@@ -132,6 +132,12 @@ std::vector<std::string>& Dump<TF>::get_dumplist()
 template<typename TF>
 void Dump<TF>::save_dump(TF* data, const std::string& varname, int iotime)
 {
+    save_data(data, varname, iotime);
+}
+
+template<typename TF>
+void Dump<TF>::save_data(TF* data, const std::string& varname, int iotime)
+{
     auto& gd = grid.get_grid_data();
     const double no_offset = 0.;
     char filename[256];
@@ -145,7 +151,6 @@ void Dump<TF>::save_dump(TF* data, const std::string& varname, int iotime)
     }
     else
     {
-
         auto tmp1 = fields.get_tmp();
         auto tmp2 = fields.get_tmp();
 
@@ -162,6 +167,33 @@ void Dump<TF>::save_dump(TF* data, const std::string& varname, int iotime)
         fields.release_tmp(tmp1);
         fields.release_tmp(tmp2);
     }
+}
+
+template<typename TF>
+void Dump<TF>::load_data(TF* data, const std::string& varname, int iotime)
+{
+    auto& gd = grid.get_grid_data();
+    const double no_offset = 0.;
+    char filename[256];
+
+    std::snprintf(filename, 256, "%s.%07d", varname.c_str(), iotime);
+
+    auto tmp1 = fields.get_tmp();
+    auto tmp2 = fields.get_tmp();
+
+    if (field3d_io.load_field3d(
+                data,
+                tmp1->fld.data(), tmp2->fld.data(),
+                filename, no_offset,
+                gd.kstart, gd.kend))
+    {
+        fields.release_tmp(tmp1);
+        fields.release_tmp(tmp2);
+        throw std::runtime_error("Reading error in dump");
+    }
+
+    fields.release_tmp(tmp1);
+    fields.release_tmp(tmp2);
 }
 
 

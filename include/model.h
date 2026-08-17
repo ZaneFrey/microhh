@@ -51,8 +51,9 @@ template<typename> class Thermo;
 template<typename> class Microphys;
 template<typename> class Radiation;
 template<typename> class Land_surface;
+template<typename> class Canopy;
 template<typename> class DragDisk;
-template<typename> class Turbine;
+// template<typename> class Turbine;
 
 template<typename> class Decay;
 template<typename> class Limiter;
@@ -63,6 +64,7 @@ template<typename> class Budget;
 template<typename> class Column;
 template<typename> class Cross;
 template<typename> class Dump;
+template<typename> class Average;
 
 enum class Sim_mode;
 
@@ -111,14 +113,16 @@ class Model
         std::shared_ptr<Source<TF>> source;
 
         std::shared_ptr<Particle_bin<TF>> particle_bin;
+        std::shared_ptr<Canopy<TF>> canopy;
         std::shared_ptr<DragDisk<TF>> dragdisk;
-        std::shared_ptr<Turbine<TF>> turbine;
+        // std::shared_ptr<Turbine<TF>> turbine;
 
         std::shared_ptr<Stats<TF>> stats;
         std::shared_ptr<Budget<TF>> budget;
         std::shared_ptr<Column<TF>> column;
         std::shared_ptr<Cross<TF>> cross;
         std::shared_ptr<Dump<TF>> dump;
+        std::shared_ptr<Average<TF>> average;
 
         Sim_mode sim_mode;
         std::string sim_name;

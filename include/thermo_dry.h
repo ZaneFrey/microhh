@@ -37,6 +37,7 @@ template<typename> class Stats;
 template<typename> class Diff;
 template<typename> class Column;
 template<typename> class Dump;
+template<typename> class Average;
 template<typename> class Cross;
 template<typename> class Field3d;
 template<typename> class Timedep;
@@ -56,7 +57,7 @@ class Thermo_dry : public Thermo<TF>
         virtual ~Thermo_dry(); // Destructor of the dry thermodynamics class.
 
         void init();
-        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Timeloop<TF>&);
+        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Average<TF>&, Timeloop<TF>&);
         void exec(const double, Stats<TF>&); // Add the tendencies belonging to the buoyancy.
         unsigned long get_time_limit(unsigned long, double); // Compute the time limit (n/a for thermo_dry).
         void create_stats(Stats<TF>&);   // Initialization of the statistics.
@@ -64,6 +65,7 @@ class Thermo_dry : public Thermo<TF>
         void exec_stats(Stats<TF>&);
         void exec_cross(Cross<TF>&, unsigned long);
         void exec_dump(Dump<TF>&, unsigned long);
+        void exec_average(Average<TF>&, const double);
         void exec_column(Column<TF>&);
 
         bool check_field_exists(std::string name);
@@ -144,9 +146,11 @@ class Thermo_dry : public Thermo<TF>
         std::vector<std::string> allowedcrossvars; // List with allowed cross variables
         bool swcross_b;
         std::vector<std::string> dumplist;         // List with all 3d dumps from the ini file.
+        std::vector<std::string> averagelist;      // List with all 3d averages from the ini file.
 
         void create_column(Column<TF>&); // Initialization of the single column output.
         void create_dump(Dump<TF>&);     // Initialization of the single column output.
+        void create_average(Average<TF>&); // Initialization of the running average output.
         void create_cross(Cross<TF>&);   // Initialization of the single column output.
 
         enum class Basestate_type {anelastic, boussinesq};

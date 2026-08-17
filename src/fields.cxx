@@ -41,6 +41,7 @@
 #include "column.h"
 #include "cross.h"
 #include "dump.h"
+#include "average.h"
 #include "diff.h"
 #include "fast_math.h"
 
@@ -441,7 +442,8 @@ Fields<TF>::~Fields()
 }
 
 template<typename TF>
-void Fields<TF>::init(Input& input, Dump<TF>& dump, Cross<TF>& cross, const Sim_mode sim_mode)
+void Fields<TF>::init(
+        Input& input, Dump<TF>& dump, Average<TF>& average, Cross<TF>& cross, const Sim_mode sim_mode)
 {
     auto& gd = grid.get_grid_data();
 
@@ -513,6 +515,7 @@ void Fields<TF>::init(Input& input, Dump<TF>& dump, Cross<TF>& cross, const Sim_
 
     // Set up output classes
     create_dump(dump);
+    create_average(average);
     create_cross(cross);
 
     // Flag the data from the input that is not used outside of Init mode.
@@ -573,6 +576,35 @@ void Fields<TF>::create_dump(Dump<TF>& dump)
             }
             else
                 ++dumpvar;
+        }
+    }
+}
+
+template<typename TF>
+void Fields<TF>::create_average(Average<TF>& average)
+{
+    if (average.get_switch())
+    {
+        std::vector<std::string>& averagelist_global = average.get_averagelist();
+        auto averagevar = averagelist_global.begin();
+
+        while (averagevar != averagelist_global.end())
+        {
+            if (a.count(*averagevar))
+            {
+                if (std::find(averagelist_local.begin(), averagelist_local.end(), *averagevar)
+                        == averagelist_local.end())
+                {
+                    averagelist_local.push_back(*averagevar);
+                    average.add_field(*averagevar);
+                }
+
+                averagevar = averagelist_global.erase(averagevar);
+            }
+            else
+            {
+                ++averagevar;
+            }
         }
     }
 }
@@ -1541,6 +1573,15 @@ void Fields<TF>::exec_column(Column<TF>& column)
         column.calc_time_series(it.first + "_bot", it.second->fld_bot.data(), no_offset);
 
     column.calc_column("p", sd.at("p")->fld.data(), no_offset);
+}
+#endif
+
+#ifndef USECUDA
+template<typename TF>
+void Fields<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    for (auto& it : averagelist_local)
+        average.accumulate(it, a.at(it)->fld.data(), TF(dt));
 }
 #endif
 

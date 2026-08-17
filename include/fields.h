@@ -44,6 +44,7 @@ template<typename> class Advec;
 template<typename> class Diff;
 template<typename> class Column;
 template<typename> class Dump;
+template<typename> class Average;
 template<typename> class Cross;
 template<typename> class Field3d;
 template<typename> class Soil_field3d;
@@ -76,17 +77,19 @@ class Fields
         Fields(Master&, Grid<TF>&, Soil_grid<TF>&, Input&); ///< Constructor of the fields class.
         ~Fields(); ///< Destructor of the fields class.
 
-        void init(Input&, Dump<TF>&, Cross<TF>&, const Sim_mode);  ///< Initialization of the field arrays.
+        void init(Input&, Dump<TF>&, Average<TF>&, Cross<TF>&, const Sim_mode);  ///< Initialization of the field arrays.
         void create(Input&, Netcdf_file&); ///< Initialization of the fields (random perturbations, vortices).
         void create_stats(Stats<TF>&);    ///< Initialization of the fields statistics.
         void create_column(Column<TF>&);  ///< Initialization of the single column output.
         void create_dump(Dump<TF>&);      ///< Initialization of the single column output.
+        void create_average(Average<TF>&); ///< Initialization of the running averages.
         void create_cross(Cross<TF>&);    ///< Initialization of the single column output.
 
         void exec();
         void get_mask(Stats<TF>&, std::string);
         void exec_stats(Stats<TF>&);   ///< Calculate the statistics
         void exec_column(Column<TF>&);   ///< Output the column
+        void exec_average(Average<TF>&, const double);
 
         void reset_tendencies();
 
@@ -209,6 +212,7 @@ class Fields
         // cross sections
         std::vector<std::string> crosslist; ///< List with all crosses from the ini file.
         std::vector<std::string> dumplist;  ///< List with all 3d dumps from the ini file.
+        std::vector<std::string> averagelist_local;  ///< List with all 3d averages from the ini file.
 
         // Cross sections split per type.
         std::vector<std::string> cross_simple;

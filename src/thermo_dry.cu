@@ -28,6 +28,7 @@
 #include "constants.h"
 #include "master.h"
 #include "column.h"
+#include "average.h"
 #include "tools.h"
 #include "stats.h"
 #include "finite_difference.h"
@@ -363,6 +364,28 @@ void Thermo_dry<TF>::exec_column(Column<TF>& column)
 
     get_thermo_field_g(*output, "b", false);
     column.calc_column("b", output->fld_g, no_offset);
+
+    fields.release_tmp_g(output);
+}
+#endif
+
+#ifdef USECUDA
+template<typename TF>
+void Thermo_dry<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    auto output = fields.get_tmp_g();
+
+    for (auto& it : averagelist)
+    {
+        if (it == "b")
+            get_thermo_field_g(*output, "b", false);
+        else if (it == "T")
+            get_thermo_field_g(*output, "T", false);
+        else
+            throw std::runtime_error("Thermo average field not supported");
+
+        average.accumulate_g(it, output->fld_g, TF(dt));
+    }
 
     fields.release_tmp_g(output);
 }

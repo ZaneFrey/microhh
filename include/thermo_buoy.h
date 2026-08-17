@@ -34,6 +34,7 @@ template<typename> class Stats;
 template<typename> class Diff;
 template<typename> class Column;
 template<typename> class Dump;
+template<typename> class Average;
 template<typename> class Cross;
 template<typename> class Field3d;
 template<typename> class Timeloop;
@@ -52,7 +53,7 @@ class Thermo_buoy : public Thermo<TF>
         virtual ~Thermo_buoy(); ///< Destructor of the dry thermodynamics class.
 
         void exec(const double, Stats<TF>&); ///< Add the tendencies belonging to the buoyancy.
-        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Timeloop<TF>&);
+        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Average<TF>&, Timeloop<TF>&);
         unsigned long get_time_limit(unsigned long, double); ///< Compute the time limit (n/a for thermo_buoy)
         void create_stats(Stats<TF>&) {};    ///< Initialization of the fields statistics.
 
@@ -94,6 +95,7 @@ class Thermo_buoy : public Thermo<TF>
         void exec_stats(Stats<TF>&) {};
         void exec_cross(Cross<TF>&, unsigned long) {};
         void exec_dump(Dump<TF>&, unsigned long) {};
+        void exec_average(Average<TF>&, const double) {};
         void exec_column(Column<TF>&) {};
         void get_mask(Stats<TF>&, std::string) {};
         bool has_mask(std::string) {return false;};

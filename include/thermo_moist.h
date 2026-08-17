@@ -35,6 +35,7 @@ template<typename> class Stats;
 template<typename> class Diff;
 template<typename> class Column;
 template<typename> class Dump;
+template<typename> class Average;
 template<typename> class Cross;
 template<typename> class Field3d;
 template<typename> class Timedep;
@@ -58,7 +59,7 @@ class Thermo_moist : public Thermo<TF>
         virtual ~Thermo_moist(); ///< Destructor of the moist thermodynamics class.
 
         void init();
-        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Timeloop<TF>&);
+        void create(Input&, Netcdf_handle&, Stats<TF>&, Column<TF>&, Cross<TF>&, Dump<TF>&, Average<TF>&, Timeloop<TF>&);
         void create_basestate(Input&, Netcdf_handle&, Timeloop<TF>&);
         void create_stats(Stats<TF>&);   ///< Initialization of the statistics.
 
@@ -71,6 +72,7 @@ class Thermo_moist : public Thermo<TF>
         void exec_stats(Stats<TF>&);
         void exec_cross(Cross<TF>&, unsigned long);
         void exec_dump(Dump<TF>&, unsigned long);
+        void exec_average(Average<TF>&, const double);
         void exec_column(Column<TF>&);
 
         bool check_field_exists(std::string name);
@@ -143,9 +145,11 @@ class Thermo_moist : public Thermo<TF>
         bool swcross_qlqithv;
 
         std::vector<std::string> dumplist;         ///< List with all 3d dumps from the ini file.
+        std::vector<std::string> averagelist;      ///< List with all 3d averages from the ini file.
 
         void create_column(Column<TF>&); ///< Initialization of the single column output.
         void create_dump(Dump<TF>&);     ///< Initialization of the single column output.
+        void create_average(Average<TF>&); ///< Initialization of the running average output.
         void create_cross(Cross<TF>&);   ///< Initialization of the single column output.
         std::vector<std::string> available_masks;   // Vector with the masks that fields can provide
 

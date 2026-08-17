@@ -38,6 +38,7 @@
 #include "master.h"
 #include "cross.h"
 #include "dump.h"
+#include "average.h"
 #include "column.h"
 #include "thermo_moist_functions.h"
 #include "timeloop.h"
@@ -1393,7 +1394,7 @@ void Thermo_moist<TF>::create_basestate(
 template<typename TF>
 void Thermo_moist<TF>::create(
         Input& inputin, Netcdf_handle& input_nc, Stats<TF>& stats,
-        Column<TF>& column, Cross<TF>& cross, Dump<TF>& dump, Timeloop<TF>& timeloop)
+        Column<TF>& column, Cross<TF>& cross, Dump<TF>& dump, Average<TF>& average, Timeloop<TF>& timeloop)
 {
     fields.set_calc_mean_profs(true);
 
@@ -1409,6 +1410,7 @@ void Thermo_moist<TF>::create(
     // create_stats(stats);
     create_column(column);
     create_dump(dump);
+    create_average(average);
     create_cross(cross);
 }
 
@@ -2088,6 +2090,34 @@ void Thermo_moist<TF>::create_dump(Dump<TF>& dump)
 }
 
 template<typename TF>
+void Thermo_moist<TF>::create_average(Average<TF>& average)
+{
+    if (average.get_switch())
+    {
+        std::vector<std::string>& averagelist_global = average.get_averagelist();
+        auto averagevar = averagelist_global.begin();
+
+        while (averagevar != averagelist_global.end())
+        {
+            if (check_field_exists(*averagevar))
+            {
+                if (std::find(averagelist.begin(), averagelist.end(), *averagevar) == averagelist.end())
+                {
+                    averagelist.push_back(*averagevar);
+                    average.add_field(*averagevar);
+                }
+
+                averagevar = averagelist_global.erase(averagevar);
+            }
+            else
+            {
+                ++averagevar;
+            }
+        }
+    }
+}
+
+template<typename TF>
 void Thermo_moist<TF>::exec_stats(Stats<TF>& stats)
 {
     auto& gd = grid.get_grid_data();
@@ -2413,6 +2443,28 @@ void Thermo_moist<TF>::exec_dump(Dump<TF>& dump, unsigned long iotime)
 
     fields.release_tmp(output);
 }
+
+#ifndef USECUDA
+template<typename TF>
+void Thermo_moist<TF>::exec_average(Average<TF>& average, const double dt)
+{
+    bs_stats = bs;
+
+    auto output = fields.get_tmp();
+
+    for (auto& it : averagelist)
+    {
+        if (check_field_exists(it))
+            get_thermo_field(*output, it, false, true);
+        else
+            throw std::runtime_error("Thermo average field not supported");
+
+        average.accumulate(it, output->fld.data(), TF(dt));
+    }
+
+    fields.release_tmp(output);
+}
+#endif
 
 
 #ifdef FLOAT_SINGLE
