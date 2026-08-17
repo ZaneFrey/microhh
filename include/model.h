@@ -51,9 +51,6 @@ template<typename> class Thermo;
 template<typename> class Microphys;
 template<typename> class Radiation;
 template<typename> class Land_surface;
-template<typename> class Canopy;
-template<typename> class DragDisk;
-// template<typename> class Turbine;
 
 template<typename> class Decay;
 template<typename> class Limiter;
@@ -113,9 +110,6 @@ class Model
         std::shared_ptr<Source<TF>> source;
 
         std::shared_ptr<Particle_bin<TF>> particle_bin;
-        std::shared_ptr<Canopy<TF>> canopy;
-        std::shared_ptr<DragDisk<TF>> dragdisk;
-        // std::shared_ptr<Turbine<TF>> turbine;
 
         std::shared_ptr<Stats<TF>> stats;
         std::shared_ptr<Budget<TF>> budget;

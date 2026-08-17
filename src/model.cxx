@@ -58,7 +58,6 @@
 #include "source.h"
 #include "aerosol.h"
 #include "background_profs.h"
-#include "canopy.h"
 
 #ifdef USECUDA
 #include <cuda_runtime_api.h>
@@ -148,9 +147,6 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
 
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
 
-
-        canopy    = std::make_shared<Canopy<TF>>(master, *grid, *fields, *input);
-
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
 
         stats     = std::make_shared<Stats <TF>>(master, *grid, *soil_grid, *background, *fields, *advec, *diff, *input);
@@ -210,7 +206,6 @@ void Model<TF>::init()
     decay->init(*input);
     budget->init();
     source->init();
-    canopy->init();
     aerosol->init();
     background->init(*input_nc);
 
@@ -280,7 +275,6 @@ void Model<TF>::load()
     source->create(*input, *input_nc);
     particle_bin->create(*timeloop);
     aerosol->create(*input, *input_nc, *stats);
-    canopy->create(*input, *input_nc, *stats);
     background->create(*input, *input_nc, *stats);
 
 
@@ -438,9 +432,6 @@ void Model<TF>::exec()
 
                 // Gravitational settling of binned dust types.
                 particle_bin->exec(*stats);
-
-                // Canopy drag.
-                canopy->exec();
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);
@@ -627,8 +618,6 @@ void Model<TF>::prepare_gpu()
     microphys->prepare_device();
     radiation->prepare_device();
     column   ->prepare_device();
-    average  ->prepare_device();
-    canopy   ->prepare_device();
     aerosol  ->prepare_device();
     // Prepare pressure last, for memory check
     pres     ->prepare_device();
@@ -649,8 +638,6 @@ void Model<TF>::clear_gpu()
     microphys->clear_device();
     radiation->clear_device();
     column   ->clear_device();
-    average  ->clear_device();
-    canopy   ->clear_device();
     aerosol  ->clear_device();
 
     // Clear pressure last, for memory check
