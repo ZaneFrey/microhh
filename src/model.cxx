@@ -475,8 +475,21 @@ void Model<TF>::exec()
                                 *thermo, *timeloop,
                                 itime, iotime);
 
-                        #pragma omp task default(shared)
-                        calculate_statistics(iter, time, itime, idt, iotime, dt);
+                        #ifdef USECUDA
+                        // CUDA statistics operate on the live device fields and use the same
+                        // temporary-field pool as the time integration. They must finish before
+                        // the next Runge-Kutta step starts reusing those fields and buffers.
+                        if (stats->do_statistics(itime))
+                            calculate_statistics(iter, time, itime, idt, iotime, dt);
+                        else
+                        #endif
+                        {
+                            // CPU statistics operate on host fields; CUDA output without
+                            // statistics uses the host snapshot above. Both can safely overlap
+                            // the following time step.
+                            #pragma omp task default(shared)
+                            calculate_statistics(iter, time, itime, idt, iotime, dt);
+                        }
                     }
 
                     if (column->do_column(itime))

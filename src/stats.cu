@@ -505,15 +505,10 @@ void Stats<TF>::finalize_masks()
         // Mask at the full level.
         apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(), ones->fld_g.data(), mfield_g, flag, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
 
-        Grid_kernels::calc_mean_prof_kernel(
-                masked->fld_mean_g.data(),
-                masked->fld_g.data(),
-                gd.istart, gd.iend,
-                gd.jstart, gd.jend,
-                0, gd.kcells,
-                gd.icells, gd.ijcells,
-                gd.itot*gd.jtot,
-                master);
+        // Both fields reside on the CUDA device; use the CUDA reduction rather
+        // than the host/OpenACC helper.
+        field3d_operators.calc_mean_profile_g(
+                masked->fld_mean_g.data(), masked->fld_g.data());
 
         cuda_safe_call(cudaMemcpy(nmask_TF.data(), masked->fld_mean_g.data(), gd.kcells*sizeof(TF), cudaMemcpyDeviceToHost));
 
@@ -529,17 +524,10 @@ void Stats<TF>::finalize_masks()
 
         // Mask at the half level.
         apply_mask_g<<<threads.first, threads.second>>>(masked->fld_g.data(), ones->fld_g.data(), mfield_g, flagh, gd.icells, gd.jcells, gd.kcells, gd.ijcells);
-        Grid_kernels::calc_mean_prof_kernel(
-                masked->fld_mean_g.data(),
-                masked->fld_g.data(),
-                gd.istart, gd.iend,
-                gd.jstart, gd.jend,
-                0, gd.kcells,
-                gd.icells, gd.ijcells,
-                gd.itot*gd.jtot,
-                master);
+        field3d_operators.calc_mean_profile_g(
+                masked->fld_mean_g.data(), masked->fld_g.data());
 
-        cuda_safe_call(cudaMemcpy(nmask_TF.data(), masked->fld_mean_g.data(), gd.kcells*sizeof(int), cudaMemcpyDeviceToHost));
+        cuda_safe_call(cudaMemcpy(nmask_TF.data(), masked->fld_mean_g.data(), gd.kcells*sizeof(TF), cudaMemcpyDeviceToHost));
 
         it1 = std::find(varlist.begin(), varlist.end(), "areah");
         if (it1 != varlist.end())

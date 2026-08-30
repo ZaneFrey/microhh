@@ -243,14 +243,10 @@ double Advec_2<TF>::get_cfl(const double dt)
             gd.iend, gd.jend, gd.kend);
     cuda_check_error();
 
-    // Use OpenACC
-    double cfl_max = Grid_kernels::calc_max_kernel(
-            cfl,
-            gd.istart, gd.iend,
-            gd.jstart, gd.jend,
-            gd.kstart, gd.kend,
-            gd.icells, gd.ijcells,
-            master);
+    // `cfl` resides on the CUDA device.  Use the CUDA reduction rather than
+    // the host/OpenACC helper, which would dereference this device pointer on
+    // the host when MicroHH is built with CUDA but without OpenACC.
+    double cfl_max = field3d_operators.calc_max_g(cfl);
 
     grid.release_tmp_3d_g(cfl);
 

@@ -1008,7 +1008,7 @@ void Stats<TF>::calc_stats_mean(
         }
     }
     name = varname + "_bot";
-    calc_stats_2d(name, fld->fld_bot, no_offset);
+    calc_stats_2d(name, fld.fld_bot, TF(0));
 }
 #endif
 
@@ -1108,7 +1108,7 @@ void Stats<TF>::calc_stats_diff(
     if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
     {
         auto diff_flux = fields.get_tmp();
-        diff.diff_flux(*diff_flux, fld);
+        diff.get_diff_flux(*diff_flux, fld);
 
         for (auto& m : masks)
         {

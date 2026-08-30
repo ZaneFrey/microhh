@@ -24,6 +24,7 @@
 #include "grid.h"
 #ifdef USECUDA
 #include "tools.h"
+#include "boundary_cyclic_cuda.cuh"
 #endif
 #include "boundary_cyclic.h"
 #include "boundary_cyclic_kernels.h"
@@ -238,25 +239,23 @@ template<typename TF>
 void Boundary_cyclic<TF>::exec_g(TF* const restrict data)
 {
     auto& gd = grid.get_grid_data();
+    #ifdef USECUDA
+    #ifndef USEMPI
+    launch_boundary_cyclic_g(
+            data, gd.icells, gd.jcells, gd.kcells,
+            gd.istart, gd.iend, gd.jstart, gd.jend);
+    #else
     auto& md = master.get_MPI_data();
-
     TF* buffer_send = grid.get_tmp_3d_g();
     TF* buffer_recv = grid.get_tmp_3d_g();
-
-    const bool use_gpu = true;
-
-    Boundary_cyclic_kernels::cyclic_kernel<TF, use_gpu>(
-            data,
-            buffer_send,
-            buffer_recv,
-            Edge::Both_edges,
+    Boundary_cyclic_kernels::cyclic_kernel<TF, true>(
+            data, buffer_send, buffer_recv, Edge::Both_edges,
             gd.istart, gd.iend, gd.jstart, gd.jend,
-            gd.icells, gd.jcells, gd.kcells,
-            gd.icells, gd.ijcells,
-            md);
-
+            gd.icells, gd.jcells, gd.kcells, gd.icells, gd.ijcells, md);
     grid.release_tmp_3d_g(buffer_send);
     grid.release_tmp_3d_g(buffer_recv);
+    #endif
+    #endif
 }
 
 
@@ -264,25 +263,23 @@ template<typename TF>
 void Boundary_cyclic<TF>::exec_2d_g(TF* const restrict data)
 {
     auto& gd = grid.get_grid_data();
+    #ifdef USECUDA
+    #ifndef USEMPI
+    launch_boundary_cyclic_g(
+            data, gd.icells, gd.jcells, 1,
+            gd.istart, gd.iend, gd.jstart, gd.jend);
+    #else
     auto& md = master.get_MPI_data();
-
     TF* buffer_send = grid.get_tmp_2d_g();
     TF* buffer_recv = grid.get_tmp_2d_g();
-
-    const bool use_gpu = true;
-
-    Boundary_cyclic_kernels::cyclic_kernel<TF, use_gpu>(
-            data,
-            buffer_send,
-            buffer_recv,
-            Edge::Both_edges,
+    Boundary_cyclic_kernels::cyclic_kernel<TF, true>(
+            data, buffer_send, buffer_recv, Edge::Both_edges,
             gd.istart, gd.iend, gd.jstart, gd.jend,
-            gd.icells, gd.jcells, 1,
-            gd.icells, gd.ijcells,
-            md);
-
+            gd.icells, gd.jcells, 1, gd.icells, gd.ijcells, md);
     grid.release_tmp_2d_g(buffer_send);
     grid.release_tmp_2d_g(buffer_recv);
+    #endif
+    #endif
 }
 
 
@@ -357,25 +354,24 @@ template<typename TF>
 void Boundary_cyclic<TF>::exec_g(unsigned int* const restrict data)
 {
     auto& gd = grid.get_grid_data();
+    #ifdef USECUDA
+    #ifndef USEMPI
+    launch_boundary_cyclic_g(
+            data, gd.icells, gd.jcells, gd.kcells,
+            gd.istart, gd.iend, gd.jstart, gd.jend);
+    #else
     auto& md = master.get_MPI_data();
-
     TF* buffer_send = grid.get_tmp_3d_g();
     TF* buffer_recv = grid.get_tmp_3d_g();
-
-    const bool use_gpu = true;
-
-    Boundary_cyclic_kernels::cyclic_kernel<unsigned int, use_gpu>(
-            data,
-            reinterpret_cast<unsigned int*>(buffer_send),
-            reinterpret_cast<unsigned int*>(buffer_recv),
-            Edge::Both_edges,
+    Boundary_cyclic_kernels::cyclic_kernel<unsigned int, true>(
+            data, reinterpret_cast<unsigned int*>(buffer_send),
+            reinterpret_cast<unsigned int*>(buffer_recv), Edge::Both_edges,
             gd.istart, gd.iend, gd.jstart, gd.jend,
-            gd.icells, gd.jcells, gd.kcells,
-            gd.icells, gd.ijcells,
-            md);
-
+            gd.icells, gd.jcells, gd.kcells, gd.icells, gd.ijcells, md);
     grid.release_tmp_3d_g(buffer_send);
     grid.release_tmp_3d_g(buffer_recv);
+    #endif
+    #endif
 }
 
 
@@ -383,25 +379,24 @@ template<typename TF>
 void Boundary_cyclic<TF>::exec_2d_g(unsigned int* const restrict data)
 {
     auto& gd = grid.get_grid_data();
+    #ifdef USECUDA
+    #ifndef USEMPI
+    launch_boundary_cyclic_g(
+            data, gd.icells, gd.jcells, 1,
+            gd.istart, gd.iend, gd.jstart, gd.jend);
+    #else
     auto& md = master.get_MPI_data();
-
     TF* buffer_send = grid.get_tmp_2d_g();
     TF* buffer_recv = grid.get_tmp_2d_g();
-
-    const bool use_gpu = true;
-
-    Boundary_cyclic_kernels::cyclic_kernel<unsigned int, use_gpu>(
-            data,
-            reinterpret_cast<unsigned int*>(buffer_send),
-            reinterpret_cast<unsigned int*>(buffer_recv),
-            Edge::Both_edges,
+    Boundary_cyclic_kernels::cyclic_kernel<unsigned int, true>(
+            data, reinterpret_cast<unsigned int*>(buffer_send),
+            reinterpret_cast<unsigned int*>(buffer_recv), Edge::Both_edges,
             gd.istart, gd.iend, gd.jstart, gd.jend,
-            gd.icells, gd.jcells, 1,
-            gd.icells, gd.ijcells,
-            md);
-
+            gd.icells, gd.jcells, 1, gd.icells, gd.ijcells, md);
     grid.release_tmp_2d_g(buffer_send);
     grid.release_tmp_2d_g(buffer_recv);
+    #endif
+    #endif
 }
 
 
