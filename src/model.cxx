@@ -38,6 +38,7 @@
 #include "fft.h"
 #include "boundary.h"
 #include "immersed_boundary.h"
+#include "windfarm.h"
 #include "advec.h"
 #include "diff.h"
 #include "pres.h"
@@ -147,6 +148,8 @@ Model<TF>::Model(Master& masterin, int argc, char *argv[]) :
         particle_bin = std::make_shared<Particle_bin<TF>>(master, *grid, *fields, *input);
 
         ib        = std::make_shared<Immersed_boundary<TF>>(master, *grid, *fields, *input);
+        windfarm  = std::make_shared<WindFarm<TF>>(master, *grid, *fields, *input,
+                ib->get_switch() == IB_type::DEM);
 
         stats     = std::make_shared<Stats <TF>>(master, *grid, *soil_grid, *background, *fields, *advec, *diff, *input);
         column    = std::make_shared<Column<TF>>(master, *grid, *fields, *input);
@@ -194,6 +197,7 @@ void Model<TF>::init()
 
     boundary->init(*input, *thermo, sim_mode);
     ib->init(*input, *cross);
+    windfarm->init();
     buffer->init();
     diff->init();
     pres->init();
@@ -267,6 +271,7 @@ void Model<TF>::load()
     boundary->set_values();
 
     ib->create();
+    windfarm->create(*timeloop, sim_mode == Sim_mode::Run);
     buffer->create(*input, *input_nc, *stats);
     force->create(*input, *input_nc, *stats);
     source->create(*input, *input_nc);
@@ -378,6 +383,9 @@ void Model<TF>::exec()
                 // Determine the time step.
                 set_time_step();
 
+                // Sample the flow and build the wind-turbine tendencies once per physical timestep.
+                windfarm->update(*timeloop);
+
                 // Write status information to disk.
                 print_status();
 
@@ -427,6 +435,9 @@ void Model<TF>::exec()
 
                 // Apply the large scale forcings. Keep this one always right before the pressure.
                 force->exec(timeloop->get_sub_time_step(), *thermo, *stats);
+
+                // Apply the wind-turbine tendencies during every Runge-Kutta stage.
+                windfarm->exec();
 
                 // Set the immersed boundary conditions
                 ib->exec_momentum();
@@ -547,6 +558,7 @@ void Model<TF>::exec()
                         // Save the thermo before the split of the thread, to avoid overwrite during stats
                         // leading to restart failures.
                         thermo->save(iotime);
+                        windfarm->save(iotime);
 
                         #pragma omp task default(shared)
                         {
@@ -613,6 +625,7 @@ void Model<TF>::prepare_gpu()
     diff     ->prepare_device(*boundary);
     force    ->prepare_device();
     ib       ->prepare_device();
+    windfarm ->prepare_device();
     microphys->prepare_device();
     radiation->prepare_device();
     column   ->prepare_device();
@@ -632,6 +645,7 @@ void Model<TF>::clear_gpu()
     diff     ->clear_device();
     force    ->clear_device();
     ib       ->clear_device();
+    windfarm ->clear_device();
     microphys->clear_device();
     radiation->clear_device();
     column   ->clear_device();
@@ -795,6 +809,7 @@ void Model<TF>::set_time_step()
     timeloop->set_time_step_limit(cross        ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(dump         ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(column       ->get_time_limit(timeloop->get_itime()));
+    timeloop->set_time_step_limit(windfarm     ->get_time_limit(timeloop->get_itime()));
     timeloop->set_time_step_limit(particle_bin->get_time_limit());
 
     // Set the time step.

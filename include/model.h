@@ -39,6 +39,7 @@ template<typename> class Timeloop;
 template<typename> class FFT;
 template<typename> class Boundary;
 template<typename> class Immersed_boundary;
+template<typename> class WindFarm;
 template<typename> class Buffer;
 template<typename> class Advec;
 template<typename> class Diff;
@@ -92,6 +93,7 @@ class Model
 
         std::shared_ptr<Boundary<TF>> boundary;
         std::shared_ptr<Immersed_boundary<TF>> ib;
+        std::shared_ptr<WindFarm<TF>> windfarm;
         std::shared_ptr<Buffer<TF>> buffer;
         std::shared_ptr<Advec<TF>> advec;
         std::shared_ptr<Diff<TF>> diff;
