@@ -23,6 +23,19 @@
 #ifndef DEFINES_H
 #define DEFINES_H
 
+#ifdef USECUDA
+#include <cuda_runtime.h>
+#else
+struct dim3
+{
+    constexpr dim3(const unsigned int xin=1, const unsigned int yin=1, const unsigned int zin=1) :
+        x(xin), y(yin), z(zin) {}
+    unsigned int x;
+    unsigned int y;
+    unsigned int z;
+};
+#endif
+
 #define restrict RESTRICTKEYWORD
 enum class Sim_mode { Init, Run, Post };
 

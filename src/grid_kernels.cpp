@@ -125,7 +125,7 @@ namespace Grid_kernels
                 for (int i=istart; i<iend; ++i)
                 {
                     const int ijk = i + j*jstride + k*kstride;
-                    a_max = max(a_max, a[ijk]);
+                    a_max = std::max(a_max, a[ijk]);
                 }
 
         // Max over the MPI processes.

@@ -68,7 +68,9 @@ set(HDF5_LIB "hdf5")
 set(LIBS ${FFTW_LIB} ${FFTWF_LIB} ${NETCDF_LIB_C} ${HDF5_LIB}) #It may be necessary to add m z curl sz if necessary
 
 if(USECUDA)
-    set(CMAKE_CUDA_ARCHITECTURES "70;80;90")
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES "70;80;90")
+    endif()
     set(USER_CUDA_NVCC_FLAGS "--expt-relaxed-constexpr -lineinfo")
     set(USER_CUDA_NVCC_FLAGS_RELEASE "-DNDEBUG")
     set(USER_CUDA_NVCC_FLAGS_DEBUG "-O0 -g -DCUDACHECKS")
