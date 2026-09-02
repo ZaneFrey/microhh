@@ -32,10 +32,28 @@
 namespace
 {
     template<typename TF> __global__
-    void calc_buoyancy_g(TF* __restrict__ b,
-                         TF* __restrict__ bin)
+    void calc_buoyancy_g(TF* __restrict__ b, const TF* __restrict__ bin, const int ncells)
     {
-        b[threadIdx.x] = bin[threadIdx.x];
+        const int n = blockIdx.x*blockDim.x + threadIdx.x;
+        if (n < ncells)
+            b[n] = bin[n];
+    }
+
+    template<typename TF> __global__
+    void calc_buoyancy_h_g(TF* __restrict__ bh, const TF* __restrict__ b,
+                           const TF* __restrict__ z, const TF* __restrict__ zh,
+                           int istart, int jstart, int kstart,
+                           int iend, int jend, int kend, int jj, int kk)
+    {
+        const int i = blockIdx.x*blockDim.x + threadIdx.x + istart;
+        const int j = blockIdx.y*blockDim.y + threadIdx.y + jstart;
+        const int k = blockIdx.z + kstart;
+        if (i < iend && j < jend && k <= kend)
+        {
+            const int ijk = i + j*jj + k*kk;
+            const TF f = (zh[k]-z[k-1])/(z[k]-z[k-1]);
+            bh[ijk] = (TF(1)-f)*b[ijk-kk] + f*b[ijk];
+        }
     }
 
     template<typename TF> __global__
@@ -450,7 +468,7 @@ void Thermo_buoy<TF>::get_thermo_field_g(
 {
     auto& gd = grid.get_grid_data();
 
-    int blocksize = min(256, 16 * ((gd.ncells / 16) + (gd.ncells % 16 > 0)));
+    const int blocksize = 256;
 
     const int blocki = gd.ithread_block;
     const int blockj = gd.jthread_block;
@@ -462,8 +480,20 @@ void Thermo_buoy<TF>::get_thermo_field_g(
 
     if (name == "b")
     {
-        calc_buoyancy_g<TF><<<gd.ncells, blocksize>>>(
-            fld.fld_g, fields.sp.at("b")->fld_g);
+        fld.loc = gd.sloc;
+        const int nblocks = (gd.ncells+blocksize-1)/blocksize;
+        calc_buoyancy_g<TF><<<nblocks, blocksize>>>(
+            fld.fld_g, fields.sp.at("b")->fld_g, gd.ncells);
+        cuda_check_error();
+    }
+    else if (name == "b_h")
+    {
+        fld.loc = gd.wloc;
+        dim3 gridGPUh((gd.imax+blocki-1)/blocki, (gd.jmax+blockj-1)/blockj, gd.kmax+1);
+        calc_buoyancy_h_g<TF><<<gridGPUh, blockGPU>>>(
+            fld.fld_g, fields.sp.at("b")->fld_g, gd.z_g, gd.zh_g,
+            gd.istart, gd.jstart, gd.kstart,
+            gd.iend, gd.jend, gd.kend, gd.icells, gd.ijcells);
         cuda_check_error();
     }
     else if (name == "N2")
@@ -475,6 +505,10 @@ void Thermo_buoy<TF>::get_thermo_field_g(
             gd.icells, gd.ijcells);
         cuda_check_error();
     }
+
+    // The prognostic buoyancy field, including its horizontal ghosts, is
+    // copied/interpolated directly; Thermo_buoy has no separate cyclic helper.
+    (void)cyclic;
 }
 #endif
 

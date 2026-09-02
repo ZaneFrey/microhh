@@ -655,9 +655,9 @@ unsigned long Thermo_dry<TF>::get_time_limit(unsigned long idt, const double dt)
 }
 
 template<typename TF>
-bool Thermo_dry<TF>::check_field_exists(std::string name)
+bool Thermo_dry<TF>::check_field_exists(std::string name) const
 {
-    if (name == "b" || name == "T")
+    if (name == "b" || name == "b_h" || name == "T")
         return true;
     else
         return false;
@@ -676,8 +676,27 @@ void Thermo_dry<TF>::get_thermo_field(
         base = bs;
 
     if (name == "b")
+    {
+        fld.loc = gd.sloc;
         calc_buoyancy(fld.fld.data(), fields.sp.at("th")->fld.data(), base.thref.data(),
                       gd.istart, gd.iend, gd.jstart, gd.jend, gd.icells, gd.ijcells, gd.kcells);
+    }
+    else if (name == "b_h")
+    {
+        fld.loc = gd.wloc;
+        const auto& th = fields.sp.at("th")->fld;
+        for (int k=gd.kstart; k<=gd.kend; ++k)
+        {
+            const TF f = (gd.zh[k]-gd.z[k-1])/(gd.z[k]-gd.z[k-1]);
+            for (int j=gd.jstart; j<gd.jend; ++j)
+                for (int i=gd.istart; i<gd.iend; ++i)
+                {
+                    const int ijk = i + j*gd.icells + k*gd.ijcells;
+                    const TF thh = (TF(1)-f)*th[ijk-gd.ijcells] + f*th[ijk];
+                    fld.fld[ijk] = Constants::grav<TF>/base.threfh[k] * (thh-base.threfh[k]);
+                }
+        }
+    }
     else if (name == "N2")
         calc_N2(fld.fld.data(), fields.sp.at("th")->fld.data(), gd.dzi.data(), base.thref.data(),
                 gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells, gd.kcells);

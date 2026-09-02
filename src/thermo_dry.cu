@@ -92,6 +92,25 @@ namespace
     }
 
     template<typename TF> __global__
+    void calc_buoyancy_h_g(TF* __restrict__ bh, const TF* __restrict__ th,
+                           const TF* __restrict__ threfh,
+                           const TF* __restrict__ z, const TF* __restrict__ zh,
+                           int istart, int jstart, int kstart,
+                           int iend, int jend, int kend, int jj, int kk)
+    {
+        const int i = blockIdx.x*blockDim.x + threadIdx.x + istart;
+        const int j = blockIdx.y*blockDim.y + threadIdx.y + jstart;
+        const int k = blockIdx.z + kstart;
+        if (i < iend && j < jend && k <= kend)
+        {
+            const int ijk = i + j*jj + k*kk;
+            const TF f = (zh[k]-z[k-1])/(z[k]-z[k-1]);
+            const TF thh = (TF(1)-f)*th[ijk-kk] + f*th[ijk];
+            bh[ijk] = grav<TF>/threfh[k] * (thh-threfh[k]);
+        }
+    }
+
+    template<typename TF> __global__
     void calc_buoyancy_bot_g(TF* __restrict__ b,     TF* __restrict__ bbot,
                              TF* __restrict__ th,    TF* __restrict__ thbot,
                              TF* __restrict__ thref, TF* __restrict__ threfh,
@@ -284,11 +303,23 @@ void Thermo_dry<TF>::get_thermo_field_g(
 
     if (name == "b")
     {
+        fld.loc = gd.sloc;
         calc_buoyancy_g<TF><<<gridGPU, blockGPU>>>(
             fld.fld_g, fields.sp.at("th")->fld_g, bs.thref_g,
             gd.istart, gd.jstart,
             gd.iend, gd.jend, gd.kcells,
             gd.icells, gd.ijcells);
+        cuda_check_error();
+    }
+    else if (name == "b_h")
+    {
+        fld.loc = gd.wloc;
+        dim3 gridGPUh(gridi, gridj, gd.kmax+1);
+        calc_buoyancy_h_g<TF><<<gridGPUh, blockGPU>>>(
+            fld.fld_g, fields.sp.at("th")->fld_g, bs.threfh_g,
+            gd.z_g, gd.zh_g,
+            gd.istart, gd.jstart, gd.kstart,
+            gd.iend, gd.jend, gd.kend, gd.icells, gd.ijcells);
         cuda_check_error();
     }
     else if (name == "N2")

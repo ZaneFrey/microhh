@@ -56,7 +56,8 @@ class Thermo_buoy : public Thermo<TF>
         unsigned long get_time_limit(unsigned long, double); ///< Compute the time limit (n/a for thermo_buoy)
         void create_stats(Stats<TF>&) {};    ///< Initialization of the fields statistics.
 
-        bool check_field_exists(std::string name);
+        bool check_field_exists(std::string name) const;
+        Buoyancy_geometry<TF> get_buoyancy_geometry() const override;
 
         void get_buoyancy_surf(std::vector<TF>&, std::vector<TF>&, bool);     ///< Compute the near-surface and bottom buoyancy for usage in another routine.
         void get_buoyancy_fluxbot(std::vector<TF>&, bool);  ///< Compute the bottom buoyancy flux for usage in another routine.

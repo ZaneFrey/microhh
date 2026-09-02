@@ -70,7 +70,7 @@ class Thermo_dry : public Thermo<TF>
         void exec_dump(Dump<TF>&, unsigned long);
         void exec_column(Column<TF>&);
 
-        bool check_field_exists(std::string name);
+        bool check_field_exists(std::string name) const;
         void get_thermo_field(
                 Field3d<TF>&, const std::string&, const bool, const bool);
         void get_buoyancy_surf(std::vector<TF>&, std::vector<TF>&, bool);

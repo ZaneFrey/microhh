@@ -405,7 +405,25 @@ void Thermo_buoy<TF>::get_thermo_field(
     auto& gd = grid.get_grid_data();
 
     if (name == "b")
+    {
+        b.loc = gd.sloc;
         calc_buoyancy(b.fld.data(), fields.sp.at("b")->fld.data(),gd.ncells);
+    }
+    else if (name == "b_h")
+    {
+        b.loc = gd.wloc;
+        const auto& bin = fields.sp.at("b")->fld;
+        for (int k=gd.kstart; k<=gd.kend; ++k)
+        {
+            const TF f = (gd.zh[k]-gd.z[k-1])/(gd.z[k]-gd.z[k-1]);
+            for (int j=gd.jstart; j<gd.jend; ++j)
+                for (int i=gd.istart; i<gd.iend; ++i)
+                {
+                    const int ijk = i + j*gd.icells + k*gd.ijcells;
+                    b.fld[ijk] = (TF(1)-f)*bin[ijk-gd.ijcells] + f*bin[ijk];
+                }
+        }
+    }
     else if (name == "N2")
         calc_N2(b.fld.data(), fields.sp.at("b")->fld.data(), bs.n2, gd.dzi.data(),gd.istart, gd.iend,
                 gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells, gd.kcells);
@@ -462,12 +480,22 @@ int Thermo_buoy<TF>::get_bl_depth()
 }
 
 template<typename TF>
-bool Thermo_buoy<TF>::check_field_exists(std::string name)
+bool Thermo_buoy<TF>::check_field_exists(std::string name) const
 {
-    if (name == "b")
+    if (name == "b" || name == "b_h")
         return true;
     else
         return false;
+}
+
+template<typename TF>
+Buoyancy_geometry<TF> Thermo_buoy<TF>::get_buoyancy_geometry() const
+{
+    Buoyancy_geometry<TF> geometry;
+    geometry.force_direction = {{std::sin(bs.alpha), TF(0), std::cos(bs.alpha)}};
+    geometry.background_gradient = {{
+        bs.n2*std::sin(bs.alpha), swbaroclinic ? dbdy_ls : TF(0), bs.n2*std::cos(bs.alpha)}};
+    return geometry;
 }
 
 

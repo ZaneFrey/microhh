@@ -208,6 +208,7 @@ namespace
     void calc_buoyancy_h_g(TF* __restrict__ bh,  TF* __restrict__ th,
                          TF* __restrict__ qt, TF* __restrict__ thvrefh,
                          TF* __restrict__ ph,  TF* __restrict__ exnh,
+                         const TF* __restrict__ z, const TF* __restrict__ zh,
                          int istart, int jstart, int kstart,
                          int iend,   int jend,   int kend,
                          int jj, int kk)
@@ -216,22 +217,22 @@ namespace
         const int j = blockIdx.y*blockDim.y + threadIdx.y + jstart;
         const int k = blockIdx.z + kstart;
 
-        if (i < iend && j < jend && k < kend)
+        if (i < iend && j < jend && k <= kend)
         {
             const int ijk = i + j*jj + k*kk;
-            const int kk  = i + j*jj;
+            const TF f = (zh[k]-z[k-1])/(z[k]-z[k-1]);
 
             // Half level temperature and moisture content
-            const TF thh = static_cast<TF>(0.5) * (th[ijk-kk] + th[ijk]); // Half level liq. water pot. temp.
-            const TF qth = static_cast<TF>(0.5) * (qt[ijk-kk] + qt[ijk]); // Half level specific hum.
+            const TF thh = (TF(1)-f)*th[ijk-kk] + f*th[ijk]; // Half level liq. water pot. temp.
+            const TF qth = (TF(1)-f)*qt[ijk-kk] + f*qt[ijk]; // Half level specific hum.
 
             Struct_sat_adjust<TF> ssa = sat_adjust_g(thh, qth, ph[k], exnh[k]);
 
             // Calculate tendency
             if (ssa.ql + ssa.qi > 0)
-                bh[ijk] += buoyancy(exnh[k], thh, qth, ssa.ql, ssa.qi, thvrefh[k]);
+                bh[ijk] = buoyancy(exnh[k], thh, qth, ssa.ql, ssa.qi, thvrefh[k]);
             else
-                bh[ijk] += buoyancy_no_ql(thh, qth, thvrefh[k]);
+                bh[ijk] = buoyancy_no_ql(thh, qth, thvrefh[k]);
         }
     }
 
@@ -1008,6 +1009,7 @@ void Thermo_moist<TF>::get_thermo_field_g(
 
     if (name == "b")
     {
+        fld.loc = gd.sloc;
         calc_buoyancy_g<TF><<<gridGPU, blockGPU>>>(
             fld.fld_g, fields.sp.at("thl")->fld_g, fields.sp.at("qt")->fld_g,
             bs.thvref_g, bs.pref_g, bs.exnref_g,
@@ -1018,11 +1020,14 @@ void Thermo_moist<TF>::get_thermo_field_g(
     }
     else if (name == "b_h")
     {
-        calc_buoyancy_g<TF><<<gridGPU, blockGPU>>>(
+        fld.loc = gd.wloc;
+        dim3 gridGPUh(gridi, gridj, gd.kmax+1);
+        calc_buoyancy_h_g<TF><<<gridGPUh, blockGPU>>>(
             fld.fld_g, fields.sp.at("thl")->fld_g, fields.sp.at("qt")->fld_g,
             bs.thvrefh_g, bs.prefh_g, bs.exnrefh_g,
+            gd.z_g, gd.zh_g,
             gd.istart,  gd.jstart, gd.kstart,
-            gd.iend, gd.jend, gd.kcells,
+            gd.iend, gd.jend, gd.kend,
             gd.icells, gd.ijcells);
         cuda_check_error();
     }

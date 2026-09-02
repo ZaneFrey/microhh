@@ -47,7 +47,7 @@ unsigned long Thermo_disabled<TF>::get_time_limit(unsigned long idt, const doubl
 }
 
 template<typename TF>
-bool Thermo_disabled<TF>::check_field_exists(std::string name)
+bool Thermo_disabled<TF>::check_field_exists(std::string name) const
 {
     return false;  // always returns error
 }

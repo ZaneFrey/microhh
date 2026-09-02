@@ -170,16 +170,16 @@ namespace
     void calc_buoyancy_h(TF* restrict bh, TF* restrict thl, TF* restrict qt,
                          TF* restrict ph, TF* restrict thvrefh, TF* restrict thlh, TF* restrict qth,
                          TF* restrict ql, TF* restrict qi,
+                         const TF* restrict z, const TF* restrict zh,
                          const int istart, const int iend,
                          const int jstart, const int jend,
                          const int kstart, const int kend,
                          const int jj, const int kk)
     {
-        using Finite_difference::O2::interp2;
-
         for (int k=kstart; k<kend+1; k++)
         {
             const TF exnh = exner(ph[k]);
+            const TF f = (zh[k] - z[k-1]) / (z[k] - z[k-1]);
 
             if (k>=kstart)
             {
@@ -190,8 +190,8 @@ namespace
                         const int ijk = i + j*jj + k*kk;
                         const int ij  = i + j*jj;
 
-                        thlh[ij] = interp2(thl[ijk-kk], thl[ijk]);
-                        qth[ij]  = interp2(qt[ijk-kk], qt[ijk]);
+                        thlh[ij] = (TF(1)-f)*thl[ijk-kk] + f*thl[ijk];
+                        qth[ij]  = (TF(1)-f)*qt [ijk-kk] + f*qt [ijk];
                     }
 
                 for (int j=jstart; j<jend; j++)
@@ -1538,9 +1538,9 @@ bool Thermo_moist<TF>::has_mask(std::string mask_name)
 }
 
 template<typename TF>
-bool Thermo_moist<TF>::check_field_exists(const std::string name)
+bool Thermo_moist<TF>::check_field_exists(const std::string name) const
 {
-    if (name == "b" || name == "ql" || name == "T" || name == "qi" || name == "qlqi")
+    if (name == "b" || name == "b_h" || name == "ql" || name == "T" || name == "qi" || name == "qlqi")
         return true;
     else
         return false;
@@ -1577,6 +1577,7 @@ void Thermo_moist<TF>::get_thermo_field(
 
     if (name == "b")
     {
+        fld.loc = gd.sloc;
         auto tmp  = fields.get_tmp();
         auto tmp2 = fields.get_tmp();
         calc_buoyancy(
@@ -1588,10 +1589,12 @@ void Thermo_moist<TF>::get_thermo_field(
     }
     else if (name == "b_h")
     {
+        fld.loc = gd.wloc;
         auto tmp = fields.get_tmp();
         calc_buoyancy_h(
                 fld.fld.data(), fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(), base.prefh.data(), base.thvrefh.data(),
                 &tmp->fld[0*gd.ijcells], &tmp->fld[1*gd.ijcells], &tmp->fld[2*gd.ijcells], &tmp->fld[3*gd.ijcells],
+                gd.z.data(), gd.zh.data(),
                 gd.istart, gd.iend, gd.jstart, gd.jend, gd.kstart, gd.kend, gd.icells, gd.ijcells);
         fields.release_tmp(tmp);
     }

@@ -23,6 +23,8 @@
 #ifndef THERMO_H
 #define THERMO_H
 
+#include <array>
+
 class Master;
 class Input;
 class Netcdf_handle;
@@ -39,6 +41,13 @@ template<typename> class Timeloop;
 enum class Sim_mode;
 enum class Thermo_type {Buoy, Dry, Moist, Disabled};
 
+template<typename TF>
+struct Buoyancy_geometry
+{
+    std::array<TF, 3> force_direction {{TF(0), TF(0), TF(1)}};
+    std::array<TF, 3> background_gradient {{TF(0), TF(0), TF(0)}};
+};
+
 /**
  * Base class for the thermo scheme. This class is abstract and only
  * derived classes can be instantiated. Derived classes are
@@ -51,7 +60,8 @@ class Thermo
         Thermo(Master&, Grid<TF>&, Fields<TF>&, Input&);
         virtual ~Thermo();
         static std::shared_ptr<Thermo> factory(Master&, Grid<TF>&, Fields<TF>&, Input&, const Sim_mode);
-        Thermo_type get_switch();
+        Thermo_type get_switch() const;
+        virtual Buoyancy_geometry<TF> get_buoyancy_geometry() const { return {}; }
 
         // Below are the functions that the derived class has to implement.
         virtual void init() = 0;
@@ -73,7 +83,7 @@ class Thermo
         virtual bool has_mask(std::string) = 0;
 
         // Interfacing functions to get buoyancy properties from other classes.
-        virtual bool check_field_exists(std::string name) = 0;
+        virtual bool check_field_exists(std::string name) const = 0;
         virtual void get_thermo_field(
                 Field3d<TF>&, const std::string&, const bool, const bool) = 0;
         virtual void get_buoyancy_surf(std::vector<TF>&, std::vector<TF>&, bool) = 0;
