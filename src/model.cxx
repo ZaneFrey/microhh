@@ -188,11 +188,17 @@ void Model<TF>::init()
 
     grid->init();
     soil_grid->init();
+
+    if (diff->get_switch() == Diffusion_type::Diff_amd2 && ib->get_switch() != IB_type::Disabled)
+        throw std::runtime_error("swdiff=amd2 does not support active immersed boundaries; disable [IB] sw_immersed_boundary");
+
+    diff->register_fields();
     fields->init(*input, *dump, *cross, sim_mode);
 
     fft->init();
 
     boundary->init(*input, *thermo, sim_mode);
+    diff->validate_configuration(*thermo);
     ib->init(*input, *cross);
     buffer->init();
     diff->init();
@@ -459,10 +465,24 @@ void Model<TF>::exec()
                         radiation->exec_individual_column_stats(*column, *thermo, *microphys, *timeloop, *stats, *aerosol, *background);
                     }
 
-                    if (stats->do_statistics(itime) || cross->do_cross(itime) || dump->do_dump(itime, idt))
+                    const bool statistics_due = stats->do_statistics(itime);
+                    const bool cross_due = cross->do_cross(itime);
+                    const bool dump_due = dump->do_dump(itime, idt);
+
+                    // A statistics snapshot must never race an earlier output
+                    // task, on either CPU or GPU builds.
+                    if (statistics_due)
+                    {
+                        #pragma omp taskwait
+                    }
+
+                    if (statistics_due || cross_due || dump_due)
                     {
                         #ifdef USECUDA
-                        #pragma omp taskwait
+                        if (!statistics_due)
+                        {
+                            #pragma omp taskwait
+                        }
                         cpu_up_to_date = true;
                         fields   ->backward_device();
                         boundary ->backward_device(*thermo);
@@ -474,6 +494,9 @@ void Model<TF>::exec()
                                 *stats, *cross, *dump, *column,
                                 *thermo, *timeloop,
                                 itime, iotime);
+
+                        if (statistics_due)
+                            diff->prepare_stats();
 
                         #pragma omp task default(shared)
                         calculate_statistics(iter, time, itime, idt, iotime, dt);
@@ -569,6 +592,8 @@ void Model<TF>::exec()
             } // End time loop.
         } // End OpenMP master region.
     } // End OpenMP parallel region.
+
+    diff->finalize_diagnostics();
 
     #ifdef USECUDA
     // At the end of the run, copy the data back from the GPU.

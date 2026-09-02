@@ -113,6 +113,10 @@ class Boundary
         virtual const std::vector<TF>& get_dbdz() const;
 
         std::string get_switch();
+        Boundary_type get_momentum_bcbot() const { return mbcbot; }
+        Boundary_type get_momentum_bctop() const { return mbctop; }
+        Boundary_type get_scalar_bcbot(const std::string& name) const { return sbc.at(name).bcbot; }
+        Boundary_type get_scalar_bctop(const std::string& name) const { return sbc.at(name).bctop; }
 
         #ifdef USECUDA
         virtual cuda_vector<TF>& get_z0m_g();

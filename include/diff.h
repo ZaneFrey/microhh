@@ -53,6 +53,13 @@ class Diff
         virtual unsigned long get_time_limit(unsigned long, double) = 0;
         virtual double get_dn(double) = 0;
 
+        // Optional lifecycle hooks for diffusion schemes that register fields
+        // after all physics constructors or maintain asynchronous diagnostics.
+        virtual void register_fields() {}
+        virtual void validate_configuration(const Thermo<TF>&) {}
+        virtual void prepare_stats() {}
+        virtual void finalize_diagnostics() {}
+
         static std::shared_ptr<Diff> factory(Master&, Grid<TF>&, Fields<TF>&, Boundary<TF>&, Input&);
 
         #ifdef USECUDA
