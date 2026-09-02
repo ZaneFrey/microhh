@@ -245,6 +245,11 @@ void Master::sum(float* var, int datasize)
     MPI_Allreduce(MPI_IN_PLACE, var, datasize, MPI_FLOAT, MPI_SUM, md.commxy);
 }
 
+void Master::sum(std::uint64_t* var, int datasize)
+{
+    MPI_Allreduce(MPI_IN_PLACE, var, datasize, MPI_UINT64_T, MPI_SUM, md.commxy);
+}
+
 void Master::max(double* var, int datasize)
 {
     MPI_Allreduce(MPI_IN_PLACE, var, datasize, MPI_DOUBLE, MPI_MAX, md.commxy);

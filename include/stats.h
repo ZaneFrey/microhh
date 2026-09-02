@@ -24,6 +24,7 @@
 #define STATS_H
 
 #include <regex>
+#include <cstdint>
 #include "boundary_cyclic.h"
 
 class Master;
@@ -84,6 +85,7 @@ struct Mask
     Prof_map<TF> soil_profs;
     Prof_map<TF> background_profs;
     Time_series_map<TF> tseries;
+    std::map<std::string, Time_series_var<std::uint64_t>> tseries_u64;
 };
 
 template<typename TF>
@@ -145,6 +147,11 @@ class Stats
         void add_time_series(
                 const std::string&, const std::string&,
                 const std::string&, const std::string&, Stats_whitelist_type=Stats_whitelist_type::Default);
+        void add_time_series_u64(
+                const std::string&, const std::string&,
+                const std::string&, const std::string&);
+        void add_global_attribute(const std::string&, const std::string&);
+        void add_global_attribute(const std::string&, const double);
 
         void calc_mask_stats(
                 std::pair<const std::string, Mask<TF>>&,
@@ -174,6 +181,7 @@ class Stats
         void set_prof(const std::string&, const std::vector<TF>&);
         void set_prof_background(const std::string&, const std::vector<TF>&);
         void set_time_series(const std::string&, const TF);
+        void set_time_series_u64(const std::string&, const std::uint64_t);
 
         Mask_map<TF>& get_masks() { return masks; }
 

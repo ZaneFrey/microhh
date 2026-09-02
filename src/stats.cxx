@@ -823,6 +823,8 @@ void Stats<TF>::exec(const int iteration, const double time, const unsigned long
 
         for (auto& ts : m.tseries)
             m.tseries.at(ts.first).ncvar.insert(m.tseries.at(ts.first).data, time_index);
+        for (auto& ts : m.tseries_u64)
+            m.tseries_u64.at(ts.first).ncvar.insert(m.tseries_u64.at(ts.first).data, time_index);
 
         // Synchronize the NetCDF file.
         m.data_file->sync();
@@ -1257,6 +1259,40 @@ void Stats<TF>::add_time_series(
 }
 
 template<typename TF>
+void Stats<TF>::add_time_series_u64(
+        const std::string& name, const std::string& longname,
+        const std::string& unit, const std::string& group_name)
+{
+    if (std::find(varlist.begin(),varlist.end(),name)!=varlist.end())
+        throw std::runtime_error("Variable "+name+" is added twice in add_time_series_u64()");
+    for (auto& mask:masks)
+    {
+        Mask<TF>& m=mask.second;
+        Netcdf_handle& handle=(group_name=="") ? dynamic_cast<Netcdf_handle&>(*m.data_file)
+            : dynamic_cast<Netcdf_handle&>(m.data_file->group_exists(group_name)
+                ? m.data_file->get_group(group_name) : m.data_file->add_group(group_name));
+        Time_series_var<std::uint64_t> tmp{handle.add_variable<std::uint64_t>(name,{"time"}),0};
+        m.tseries_u64.emplace(std::piecewise_construct,std::forward_as_tuple(name),std::forward_as_tuple(std::move(tmp)));
+        m.tseries_u64.at(name).ncvar.add_attribute("units",unit);
+        m.tseries_u64.at(name).ncvar.add_attribute("long_name",longname);
+        m.tseries_u64.at(name).ncvar.add_attribute("mask_conditioning","none; domain-wide count repeated in every mask file");
+    }
+    varlist.push_back(name);
+}
+
+template<typename TF>
+void Stats<TF>::add_global_attribute(const std::string& name,const std::string& value)
+{
+    for (auto& mask:masks) mask.second.data_file->add_attribute(name,value,NC_GLOBAL);
+}
+
+template<typename TF>
+void Stats<TF>::add_global_attribute(const std::string& name,const double value)
+{
+    for (auto& mask:masks) mask.second.data_file->add_attribute(name,value,NC_GLOBAL);
+}
+
+template<typename TF>
 void Stats<TF>::initialize_masks()
 {
     auto& gd = grid.get_grid_data();
@@ -1394,6 +1430,13 @@ void Stats<TF>::set_time_series(const std::string& varname, const TF val)
         for (auto& it : masks)
             it.second.tseries.at(varname).data = val;
     }
+}
+
+template<typename TF>
+void Stats<TF>::set_time_series_u64(const std::string& varname,const std::uint64_t val)
+{
+    auto it=std::find(varlist.begin(),varlist.end(),varname);
+    if (it!=varlist.end()) for (auto& mask:masks) mask.second.tseries_u64.at(varname).data=val;
 }
 
 template<typename TF>

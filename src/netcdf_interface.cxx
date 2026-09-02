@@ -25,6 +25,8 @@
 #include <numeric>
 #include <vector>
 #include <tuple>
+#include <cstdint>
+#include <limits>
 #include <netcdf.h>
 
 #include "netcdf_interface.h"
@@ -50,6 +52,10 @@ namespace
     template<> nc_type netcdf_dtype<double>() { return NC_DOUBLE; }
     template<> nc_type netcdf_dtype<float>()  { return NC_FLOAT; }
     template<> nc_type netcdf_dtype<int>()    { return NC_INT; }
+    template<> nc_type netcdf_dtype<std::uint64_t>() { return NC_UINT64; }
+
+    static_assert(sizeof(std::uint64_t) == sizeof(unsigned long long),
+                  "NetCDF uint64 conversion requires 64-bit unsigned long long");
 
     // Wrapper for the `nc_get_vara_TYPE` functions
     template<typename TF>
@@ -61,6 +67,17 @@ namespace
             int ncid, int var_id, const std::vector<size_t>& start, const std::vector<size_t>& count, std::vector<double>& values)
     {
         return nc_get_vara_double(ncid, var_id, start.data(), count.data(), values.data());
+    }
+
+    template<>
+    int nc_get_vara_wrapper(
+            int ncid, int var_id, const std::vector<size_t>& start, const std::vector<size_t>& count, std::vector<std::uint64_t>& values)
+    {
+        std::vector<unsigned long long> converted(values.size());
+        const int result=nc_get_vara_ulonglong(ncid,var_id,start.data(),count.data(),converted.data());
+        if (result==NC_NOERR)
+            for (std::size_t n=0;n<values.size();++n) values[n]=static_cast<std::uint64_t>(converted[n]);
+        return result;
     }
     
     template<>
@@ -102,6 +119,15 @@ namespace
     {
         return nc_put_vara_double(ncid, var_id, start.data(), count.data(), values.data());
     }
+
+    template<>
+    int nc_put_vara_wrapper(
+            int ncid, int var_id, const std::vector<size_t>& start, const std::vector<size_t>& count, const std::vector<std::uint64_t>& values)
+    {
+        std::vector<unsigned long long> converted(values.size());
+        for (std::size_t n=0;n<values.size();++n) converted[n]=static_cast<unsigned long long>(values[n]);
+        return nc_put_vara_ulonglong(ncid,var_id,start.data(),count.data(),converted.data());
+    }
     
     template<>
     int nc_put_vara_wrapper(
@@ -121,6 +147,14 @@ namespace
     template<typename TF>
     int nc_put_vara_wrapper(
             int, int, const std::vector<size_t>&, const std::vector<size_t>&, const TF);
+
+    template<>
+    int nc_put_vara_wrapper(
+            int ncid, int var_id, const std::vector<size_t>& start, const std::vector<size_t>& count, const std::uint64_t value)
+    {
+        const unsigned long long converted=static_cast<unsigned long long>(value);
+        return nc_put_vara_ulonglong(ncid,var_id,start.data(),count.data(),&converted);
+    }
 
     template<>
     int nc_put_vara_wrapper(
@@ -759,31 +793,38 @@ void Netcdf_variable<T>::add_attribute(const std::string& name, const float valu
 template class Netcdf_variable<double>;
 template class Netcdf_variable<float>;
 template class Netcdf_variable<int>;
+template class Netcdf_variable<std::uint64_t>;
 
 template std::vector<double> Netcdf_handle::get_variable<double>(const std::string&, const std::vector<int>&);
 template std::vector<float>  Netcdf_handle::get_variable<float> (const std::string&, const std::vector<int>&);
 template std::vector<int>    Netcdf_handle::get_variable<int>   (const std::string&, const std::vector<int>&);
+template std::vector<std::uint64_t> Netcdf_handle::get_variable<std::uint64_t>(const std::string&, const std::vector<int>&);
 template std::vector<char>   Netcdf_handle::get_variable<char>  (const std::string&, const std::vector<int>&);
 template std::vector<signed char> Netcdf_handle::get_variable<signed char>(const std::string&, const std::vector<int>&);
 
 template double Netcdf_handle::get_variable<double>(const std::string&);
 template float  Netcdf_handle::get_variable<float> (const std::string&);
 template int    Netcdf_handle::get_variable<int>   (const std::string&);
+template std::uint64_t Netcdf_handle::get_variable<std::uint64_t>(const std::string&);
 template char   Netcdf_handle::get_variable<char>  (const std::string&);
 template signed char Netcdf_handle::get_variable<signed char>(const std::string&);
 
 template void Netcdf_handle::get_variable<double>(std::vector<double>&, const std::string&, const std::vector<int>&, const std::vector<int>&, bool);
 template void Netcdf_handle::get_variable<float> (std::vector<float>&,  const std::string&, const std::vector<int>&, const std::vector<int>&, bool);
 template void Netcdf_handle::get_variable<int>   (std::vector<int>&,    const std::string&, const std::vector<int>&, const std::vector<int>&, bool);
+template void Netcdf_handle::get_variable<std::uint64_t>(std::vector<std::uint64_t>&, const std::string&, const std::vector<int>&, const std::vector<int>&, bool);
 
 template void Netcdf_handle::insert<double>(const std::vector<double>&, const int, const std::vector<int>&, const std::vector<int>&);
 template void Netcdf_handle::insert<float> (const std::vector<float>&,  const int, const std::vector<int>&, const std::vector<int>&);
 template void Netcdf_handle::insert<int>   (const std::vector<int>&,    const int, const std::vector<int>&, const std::vector<int>&);
+template void Netcdf_handle::insert<std::uint64_t>(const std::vector<std::uint64_t>&, const int, const std::vector<int>&, const std::vector<int>&);
 
 template void Netcdf_handle::insert<double>(const double, const int, const std::vector<int>&, const std::vector<int>&);
 template void Netcdf_handle::insert<float> (const float,  const int, const std::vector<int>&, const std::vector<int>&);
 template void Netcdf_handle::insert<int>   (const int,    const int, const std::vector<int>&, const std::vector<int>&);
+template void Netcdf_handle::insert<std::uint64_t>(const std::uint64_t, const int, const std::vector<int>&, const std::vector<int>&);
 
 template Netcdf_variable<double> Netcdf_handle::add_variable<double> (const std::string&, const std::vector<std::string>&);
 template Netcdf_variable<float>  Netcdf_handle::add_variable<float>  (const std::string&, const std::vector<std::string>&);
 template Netcdf_variable<int>    Netcdf_handle::add_variable<int>    (const std::string&, const std::vector<std::string>&);
+template Netcdf_variable<std::uint64_t> Netcdf_handle::add_variable<std::uint64_t>(const std::string&, const std::vector<std::string>&);
