@@ -663,14 +663,14 @@ void Model<TF>::calculate_statistics(int iteration, double time, unsigned long i
         if (!stats->do_tendency())
             calc_masks();
 
-        grid     ->exec_stats(*stats);
-        fields   ->exec_stats(*stats);
-        thermo   ->exec_stats(*stats);
+        grid       ->exec_stats(*stats);
+        fields     ->exec_stats(*stats);
+        thermo     ->exec_stats(*stats);
         background ->exec_stats(*stats);
-        microphys->exec_stats(*stats, *thermo, dt);
-        diff     ->exec_stats(*stats, *thermo);
-        budget   ->exec_stats(*stats);
-        boundary ->exec_stats(*stats);
+        microphys  ->exec_stats(*stats, *thermo, dt);
+        diff       ->exec_stats(*stats, *thermo);
+        budget     ->exec_stats(*stats);
+        boundary   ->exec_stats(*stats);
     }
 
     // Save the selected cross sections to disk, cross sections are handled on CPU.

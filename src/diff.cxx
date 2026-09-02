@@ -40,6 +40,7 @@
 #include "diff_4.h"
 #include "diff_smag2.h"
 #include "diff_tke2.h"
+#include "diff_amd2.h"
 
 template<typename TF>
 Diff<TF>::Diff(Master& masterin, Grid<TF>& gridin, Fields<TF>& fieldsin, Boundary<TF>& boundaryin, Input& input) :
@@ -71,6 +72,8 @@ std::shared_ptr<Diff<TF>> Diff<TF>::factory(
             return std::make_shared<Diff_smag2<TF>>(masterin, gridin, fieldsin, boundaryin, inputin);
         else if (swdiff == "tke2")
             return std::make_shared<Diff_tke2<TF>>(masterin, gridin, fieldsin, boundaryin, inputin);
+        else if (swdiff == "amd2")
+            return std::make_shared<Diff_amd2<TF>>(masterin, gridin, fieldsin, boundaryin, inputin);
         else
         {
             std::string msg = "swdiff = \"" + swdiff + "\" is an illegal value for swdiff with swspatialorder = \"2\"";
@@ -79,6 +82,8 @@ std::shared_ptr<Diff<TF>> Diff<TF>::factory(
     }
     else if (gridin.get_spatial_order() == Grid_order::Fourth)
     {
+        if (swdiff == "amd2")
+            throw std::runtime_error("swdiff=amd2 is a second-order staggered-grid model; amd4 is not implemented");
         if (swdiff == "4")
             return std::make_shared<Diff_4<TF>>(masterin, gridin, fieldsin, boundaryin, inputin);
         else
