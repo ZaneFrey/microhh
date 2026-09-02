@@ -124,10 +124,10 @@ namespace Diff_les_kernels
     };
 
 
-    template<typename TF, bool surface_model_enabled>
+    template<typename TF, bool surface_model_enabled, bool strict_fp=false>
     struct diff_uvw_g
     {
-        DEFINE_GRID_KERNEL("diff_les::diff_uvw", surface_model_enabled ? 1 : 0)
+        DEFINE_GRID_KERNEL("diff_les::diff_uvw", surface_model_enabled ? 1 : 0, dim3{32, 2, 2}, strict_fp)
 
         template <typename Level>
         CUDA_DEVICE
@@ -271,10 +271,10 @@ namespace Diff_les_kernels
     };
 
 
-    template<typename TF, bool surface_model_enabled>
+    template<typename TF, bool surface_model_enabled, bool strict_fp=false>
     struct diff_c_g
     {
-        DEFINE_GRID_KERNEL("diff_les::diff_c", surface_model_enabled ? 1 : 0)
+        DEFINE_GRID_KERNEL("diff_les::diff_c", surface_model_enabled ? 1 : 0, dim3{32, 2, 2}, strict_fp)
 
         template <typename Level>
         CUDA_DEVICE

@@ -455,18 +455,21 @@ dim3 unravel_dim3(unsigned int flat_index, dim3 shape, int permutation_index) {
 /// TODO: move to better location.
 struct GridFunctor
 {
-    constexpr GridFunctor(const char* file, int line, const char* name, int edge_levels=0, dim3 block_size={32, 2, 2}) :
+    constexpr GridFunctor(const char* file, int line, const char* name, int edge_levels=0,
+                          dim3 block_size={32, 2, 2}, bool strict_fp=false) :
             file(file),
             line(line),
             name(name),
             edge_levels(edge_levels),
-            block_size(block_size) {}
+            block_size(block_size),
+            strict_fp(strict_fp) {}
 
     const char* const file;
     const char* const name;
     const int line;
     const dim3 block_size;
     const int edge_levels;
+    const bool strict_fp;
 };
 
 #define DEFINE_GRID_KERNEL(...) \

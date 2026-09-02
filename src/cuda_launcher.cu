@@ -46,6 +46,7 @@ GridKernel::GridKernel(
 bool GridKernel::equals(const IKernelDescriptor& that) const {
     if (const GridKernel* g = dynamic_cast<const GridKernel*>(&that)) {
         return g->meta.name == meta.name &&
+                g->meta.strict_fp == meta.strict_fp &&
                 g->functor_type == functor_type &&
                 g->param_types == param_types &&
                 g->grid == grid;
@@ -55,7 +56,7 @@ bool GridKernel::equals(const IKernelDescriptor& that) const {
 }
 
 size_t GridKernel::hash() const {
-    return kl::hash_fields(meta.name, functor_type);
+    return kl::hash_fields(meta.name, meta.strict_fp, functor_type);
 }
 
 kl::KernelBuilder GridKernel::build() const {
@@ -204,10 +205,13 @@ kl::KernelBuilder GridKernel::build() const {
         .define("TILE_CONTIGUOUS_Z", tile_cont)
         .define("EDGE_LEVELS", std::to_string(meta.edge_levels));
 
-    builder.compiler_flags(
-            "--restrict",
-            "-std=c++17",
-            "-I" + home_directory() + "/include");
+    if (meta.strict_fp)
+        builder.compiler_flags(
+                "--restrict", "-std=c++17", "-I" + home_directory() + "/include",
+                "--fmad=false", "--prec-div=true", "--prec-sqrt=true", "--ftz=false");
+    else
+        builder.compiler_flags(
+                "--restrict", "-std=c++17", "-I" + home_directory() + "/include");
 
     // restrictions:
     // - Threads per block should not too small (>=64) or too big (<=1024)
