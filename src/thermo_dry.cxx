@@ -939,6 +939,8 @@ void Thermo_dry<TF>::exec_stats(Stats<TF>& stats)
 
     // calculate the buoyancy and its surface flux for the profiles
     auto b = fields.get_tmp();
+    b->name = "b";
+    b->visc = get_buoyancy_diffusivity();
     b->loc = gd.sloc;
     get_thermo_field(*b, "b", true, true);
     get_buoyancy_surf(b->fld, b->fld_bot, true);

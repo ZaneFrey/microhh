@@ -1236,7 +1236,7 @@ Budget_2<TF>::Budget_2(
     field3d_operators(masterin, gridin, fieldsin)
 {
     // The LES flux budget requires one additional ghost cell in the horizontal.
-    if (diff.get_switch() == Diffusion_type::Diff_smag2)
+    if (diff.get_switch() == Diffusion_type::Diff_smag2 || diff.get_switch() == Diffusion_type::Diff_amd2)
     {
         const int igc = 2;
         const int jgc = 2;
@@ -1319,7 +1319,7 @@ void Budget_2<TF>::create(Stats<TF>& stats)
         }
 
         // For LES, add only the total diffusive budget terms, which (unlike diss + visc) close
-        else if (diff.get_switch() == Diffusion_type::Diff_smag2)
+        else if (diff.get_switch() == Diffusion_type::Diff_smag2 || diff.get_switch() == Diffusion_type::Diff_amd2)
         {
             stats.add_prof("u2_diff" , "Total diffusive term in U2 budget" , "m2 s-3", "z" , group_name);
             stats.add_prof("v2_diff" , "Total diffusive term in V2 budget" , "m2 s-3", "z" , group_name);
@@ -1343,7 +1343,7 @@ void Budget_2<TF>::create(Stats<TF>& stats)
         stats.add_prof("bw_shear", "Shear production term in B2 budget"   , "m2 s-4", "zh", group_name);
         stats.add_prof("bw_turb" , "Turbulent transport term in B2 budget", "m2 s-4", "zh", group_name);
 
-        if (diff.get_switch() != Diffusion_type::Disabled)
+        if (diff.get_switch() != Diffusion_type::Disabled && diff.get_switch() != Diffusion_type::Diff_amd2)
         {
             stats.add_prof("b2_visc" , "Viscous transport term in B2 budget", "m2 s-5", "z" , group_name);
             stats.add_prof("b2_diss" , "Dissipation term in B2 budget"      , "m2 s-5", "z" , group_name);
@@ -1498,7 +1498,7 @@ void Budget_2<TF>::exec_stats(Stats<TF>& stats)
                 fields.release_tmp(wz);
             }
 
-            else if (diff.get_switch() == Diffusion_type::Diff_smag2)
+            else if (diff.get_switch() == Diffusion_type::Diff_smag2 || diff.get_switch() == Diffusion_type::Diff_amd2)
             {
                 auto u2_diff = fields.get_tmp();
                 auto v2_diff = fields.get_tmp();
