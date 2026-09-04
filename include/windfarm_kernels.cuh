@@ -30,6 +30,14 @@ void launch_windfarm_sample_g(
         TF*, const Windfarm_sample<TF>*, int, const TF*, const TF*, const TF*, int, TF, TF);
 
 template<typename TF>
+void launch_windfarm_sensor_sample_g(
+        TF*, const Windfarm_sensor_sample<TF>*, int, const TF*, const TF*, int, TF, TF);
+
+template<typename TF>
+void launch_windfarm_hub_mean_g(
+        TF*, const TF*, const TF*, int, TF, int, int, int, int, int, int, TF, TF);
+
+template<typename TF>
 void launch_windfarm_scatter_g(
         TF*, const Windfarm_scatter<TF>*, int, const Windfarm_force<TF>*, int, int);
 

@@ -63,6 +63,16 @@ struct Windfarm_sample
 };
 
 template<typename TF>
+struct Windfarm_sensor_sample
+{
+    int owner;
+    int turbine;
+    TF area;
+    Windfarm_interpolation<TF> u;
+    Windfarm_interpolation<TF> v;
+};
+
+template<typename TF>
 struct Windfarm_element
 {
     int turbine;
@@ -124,9 +134,15 @@ class WindFarm
             int element_count;
             TF x;
             TF y;
-            TF yaw;
+            TF yaw_offset;
+            TF yaw_command;
+            TF rotor_yaw;
             TF nx;
             TF ny;
+            TF sensor_u_raw;
+            TF sensor_v_raw;
+            TF sensor_u_filtered;
+            TF sensor_v_filtered;
             TF raw_velocity;
             TF filtered_velocity;
             TF density;
@@ -134,6 +150,11 @@ class WindFarm
             TF torque;
             TF power;
             TF angular_velocity;
+            unsigned long last_sensor_sample_time;
+            unsigned long last_yaw_update_time;
+            unsigned long last_rotor_sample_time;
+            bool sensor_filter_valid;
+            bool yaw_initialized;
             bool filter_valid;
         };
 
@@ -157,21 +178,33 @@ class WindFarm
         TF cp_prime;
         TF tip_speed_ratio;
         TF sample_time;
+        TF yaw_memory_time;
+        TF yaw_update_time;
+        TF yaw_sensor_distance;
+        TF yaw_rate;
+        TF yaw_deadband;
         unsigned long isample_time;
         unsigned long istart_time;
+        unsigned long iyaw_update_time;
+        bool dynamic_yaw;
 
         std::vector<Turbine> turbines;
         std::vector<Windfarm_element<TF>> elements;
         std::vector<Windfarm_sample<TF>> samples;
+        std::vector<Windfarm_sensor_sample<TF>> sensor_samples;
         std::array<std::vector<Windfarm_scatter<TF>>, 3> scatter;
         std::vector<Windfarm_force<TF>> element_forces;
         std::array<std::vector<TF>, 3> source;
         std::vector<TF> sums;
+        std::vector<TF> sensor_sums;
+        std::vector<TF> hub_sums;
 
         std::uint64_t configuration_hash;
         bool created;
         bool device_prepared;
         bool suppress_first_output;
+        bool sensor_geometry_ready;
+        bool mean_warning_printed;
         unsigned long last_update_time;
         unsigned long output_record;
 
@@ -180,6 +213,10 @@ class WindFarm
         std::unique_ptr<Netcdf_variable<TF>> time_var;
         std::unique_ptr<Netcdf_variable<int>> id_var;
         std::unique_ptr<Netcdf_variable<TF>> yaw_var;
+        std::unique_ptr<Netcdf_variable<TF>> yaw_command_var;
+        std::unique_ptr<Netcdf_variable<TF>> yaw_offset_var;
+        std::unique_ptr<Netcdf_variable<TF>> sensor_u_var;
+        std::unique_ptr<Netcdf_variable<TF>> sensor_v_var;
         std::unique_ptr<Netcdf_variable<TF>> raw_velocity_var;
         std::unique_ptr<Netcdf_variable<TF>> filtered_velocity_var;
         std::unique_ptr<Netcdf_variable<TF>> thrust_var;
@@ -188,32 +225,48 @@ class WindFarm
 
         #ifdef USECUDA
         cuda_vector<Windfarm_sample<TF>> samples_g;
+        cuda_vector<Windfarm_sensor_sample<TF>> sensor_samples_g;
         std::array<cuda_vector<Windfarm_scatter<TF>>, 3> scatter_g;
         cuda_vector<Windfarm_force<TF>> element_forces_g;
         std::array<cuda_vector<TF>, 3> source_g;
         cuda_vector<TF> sums_g;
+        cuda_vector<TF> sensor_sums_g;
+        cuda_vector<TF> hub_sums_g;
 
-        void update_g();
+        void update_rotor_g();
+        void update_sensor_g();
+        void calculate_hub_mean_g(TF&, TF&);
+        void refresh_rotor_device();
+        void refresh_sensor_device();
         void exec_g();
         #endif
 
         void read_turbines();
         void read_yaw();
         void validate_configuration() const;
-        void build_geometry();
+        void build_topology();
+        void update_rotor_geometry();
         void build_sampling();
+        void build_sensor_sampling();
         void build_scatter();
         void calculate_configuration_hash();
-        void load_restart(int);
+        void load_restart(int, unsigned long);
         void create_output(int);
         void write_output(const Timeloop<TF>&);
-        void calculate_forces(TF, TF);
-        void update_host();
+        void calculate_forces(TF, unsigned long);
+        void update_rotor_host();
+        void update_sensor_host();
+        void calculate_hub_mean_host(TF&, TF&);
+        void initialize_dynamic_yaw(unsigned long);
+        void filter_sensor(unsigned long);
+        void update_yaw_controller(unsigned long);
+        void rebuild_yaw_geometry(bool, bool);
 
         Windfarm_interpolation<TF> make_interpolation(TF, TF, TF, int, int, int) const;
         TF interpolate_reference_density(TF) const;
         TF local_dz(TF) const;
         bool is_sample_time(unsigned long) const;
+        bool is_yaw_update_time(unsigned long) const;
 };
 
 #endif

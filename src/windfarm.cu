@@ -67,6 +67,50 @@ namespace
     }
 
     template<typename TF>
+    __global__ void sensor_sample_g(
+            TF* const __restrict__ sums,
+            const Windfarm_sensor_sample<TF>* const __restrict__ samples,
+            const int sample_count,
+            const TF* const __restrict__ u,
+            const TF* const __restrict__ v,
+            const TF utrans,
+            const TF vtrans)
+    {
+        const int p = blockIdx.x*blockDim.x+threadIdx.x;
+        if (p >= sample_count || !samples[p].owner)
+            return;
+        const Windfarm_sensor_sample<TF>& sample = samples[p];
+        atomicAdd(&sums[3*sample.turbine],
+                  (interpolate_g(u, sample.u)+utrans)*sample.area);
+        atomicAdd(&sums[3*sample.turbine+1],
+                  (interpolate_g(v, sample.v)+vtrans)*sample.area);
+        atomicAdd(&sums[3*sample.turbine+2], sample.area);
+    }
+
+    template<typename TF>
+    __global__ void hub_mean_g(
+            TF* const __restrict__ sums,
+            const TF* const __restrict__ u,
+            const TF* const __restrict__ v,
+            const int k0,
+            const TF weight,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int icells, const int ijcells,
+            const TF utrans, const TF vtrans)
+    {
+        const int i = blockIdx.x*blockDim.x+threadIdx.x+istart;
+        const int j = blockIdx.y*blockDim.y+threadIdx.y+jstart;
+        if (i < iend && j < jend)
+        {
+            const int index0 = i+j*icells+k0*ijcells;
+            const int index1 = index0+ijcells;
+            atomicAdd(&sums[0], (TF(1)-weight)*u[index0]+weight*u[index1]+utrans);
+            atomicAdd(&sums[1], (TF(1)-weight)*v[index0]+weight*v[index1]+vtrans);
+        }
+    }
+
+    template<typename TF>
     __global__ void scatter_g(
             TF* const __restrict__ source,
             const Windfarm_scatter<TF>* const __restrict__ scatter,
@@ -116,6 +160,34 @@ void launch_windfarm_sample_g(
 }
 
 template<typename TF>
+void launch_windfarm_sensor_sample_g(
+        TF* const sums, const Windfarm_sensor_sample<TF>* const samples, const int sample_count,
+        const TF* const u, const TF* const v, const int turbine_count,
+        const TF utrans, const TF vtrans)
+{
+    cuda_safe_call(cudaMemset(sums, 0, 3*turbine_count*sizeof(TF)));
+    if (sample_count > 0)
+        sensor_sample_g<TF><<<(sample_count+255)/256, 256>>>(
+                sums, samples, sample_count, u, v, utrans, vtrans);
+    cuda_check_error();
+}
+
+template<typename TF>
+void launch_windfarm_hub_mean_g(
+        TF* const sums, const TF* const u, const TF* const v, const int k0, const TF weight,
+        const int istart, const int iend, const int jstart, const int jend,
+        const int icells, const int ijcells, const TF utrans, const TF vtrans)
+{
+    cuda_safe_call(cudaMemset(sums, 0, 2*sizeof(TF)));
+    const dim3 block(16, 16, 1);
+    const dim3 grid((iend-istart+15)/16, (jend-jstart+15)/16, 1);
+    hub_mean_g<TF><<<grid, block>>>(
+            sums, u, v, k0, weight, istart, iend, jstart, jend,
+            icells, ijcells, utrans, vtrans);
+    cuda_check_error();
+}
+
+template<typename TF>
 void launch_windfarm_scatter_g(
         TF* const source, const Windfarm_scatter<TF>* const scatter, const int scatter_count,
         const Windfarm_force<TF>* const force, const int ncells, const int component)
@@ -145,8 +217,11 @@ void WindFarm<TF>::prepare_device()
     if (!created)
         return;
     samples_g = cuda_vector<Windfarm_sample<TF>>(samples);
+    sensor_samples_g = cuda_vector<Windfarm_sensor_sample<TF>>(sensor_samples);
     element_forces_g = cuda_vector<Windfarm_force<TF>>(element_forces);
     sums_g.allocate(sums.size());
+    sensor_sums_g.allocate(3*turbines.size());
+    hub_sums_g.allocate(2);
     for (int component=0; component<3; ++component)
     {
         scatter_g[component] = cuda_vector<Windfarm_scatter<TF>>(scatter[component]);
@@ -160,8 +235,11 @@ template<typename TF>
 void WindFarm<TF>::clear_device()
 {
     samples_g.free();
+    sensor_samples_g.free();
     element_forces_g.free();
     sums_g.free();
+    sensor_sums_g.free();
+    hub_sums_g.free();
     for (int component=0; component<3; ++component)
     {
         scatter_g[component].free();
@@ -171,7 +249,36 @@ void WindFarm<TF>::clear_device()
 }
 
 template<typename TF>
-void WindFarm<TF>::update_g()
+void WindFarm<TF>::refresh_rotor_device()
+{
+    if (!device_prepared)
+        return;
+    if (samples_g.size() == samples.size())
+        cuda_copy(samples, samples_g);
+    else
+        samples_g.from_vector(samples);
+    for (int component=0; component<3; ++component)
+    {
+        if (scatter_g[component].size() == scatter[component].size())
+            cuda_copy(scatter[component], scatter_g[component]);
+        else
+            scatter_g[component].from_vector(scatter[component]);
+    }
+}
+
+template<typename TF>
+void WindFarm<TF>::refresh_sensor_device()
+{
+    if (!device_prepared)
+        return;
+    if (sensor_samples_g.size() == sensor_samples.size())
+        cuda_copy(sensor_samples, sensor_samples_g);
+    else
+        sensor_samples_g.from_vector(sensor_samples);
+}
+
+template<typename TF>
+void WindFarm<TF>::update_rotor_g()
 {
     if (!device_prepared)
         throw std::runtime_error("Wind-farm device data have not been prepared");
@@ -182,6 +289,45 @@ void WindFarm<TF>::update_g()
             fields.mp.at("w")->fld_g.data(), int(turbines.size()), gd.utrans, gd.vtrans);
     cuda_copy(sums_g, sums);
     master.sum(sums.data(), int(sums.size()));
+}
+
+template<typename TF>
+void WindFarm<TF>::update_sensor_g()
+{
+    if (!device_prepared)
+        throw std::runtime_error("Wind-farm device data have not been prepared");
+    const auto& gd = grid.get_grid_data();
+    launch_windfarm_sensor_sample_g(
+            sensor_sums_g.data(), sensor_samples_g.data(), int(sensor_samples_g.size()),
+            fields.mp.at("u")->fld_g.data(), fields.mp.at("v")->fld_g.data(),
+            int(turbines.size()), gd.utrans, gd.vtrans);
+    sensor_sums.resize(3*turbines.size());
+    cuda_copy(sensor_sums_g, sensor_sums);
+    master.sum(sensor_sums.data(), int(sensor_sums.size()));
+}
+
+template<typename TF>
+void WindFarm<TF>::calculate_hub_mean_g(TF& u_mean, TF& v_mean)
+{
+    if (!device_prepared)
+        throw std::runtime_error("Wind-farm device data have not been prepared");
+    const auto& gd = grid.get_grid_data();
+    int k0 = gd.kstart-1;
+    while (k0+1 < gd.kend+1 && gd.z[k0+1] <= hub_height)
+        ++k0;
+    if (k0 < 0 || k0+1 >= gd.kcells || gd.z[k0+1] == gd.z[k0])
+        throw std::runtime_error("Cannot bracket the turbine hub height on the vertical grid");
+    const TF weight = (hub_height-gd.z[k0])/(gd.z[k0+1]-gd.z[k0]);
+    launch_windfarm_hub_mean_g(
+            hub_sums_g.data(), fields.mp.at("u")->fld_g.data(), fields.mp.at("v")->fld_g.data(),
+            k0, weight, gd.istart, gd.iend, gd.jstart, gd.jend, gd.icells, gd.ijcells,
+            gd.utrans, gd.vtrans);
+    hub_sums.resize(2);
+    cuda_copy(hub_sums_g, hub_sums);
+    master.sum(hub_sums.data(), int(hub_sums.size()));
+    const TF horizontal_count = TF(gd.itot)*TF(gd.jtot);
+    u_mean = hub_sums[0]/horizontal_count;
+    v_mean = hub_sums[1]/horizontal_count;
 }
 
 template<typename TF>
@@ -210,6 +356,10 @@ void WindFarm<TF>::exec()
 #ifdef FLOAT_SINGLE
 template void launch_windfarm_sample_g<float>(float*, const Windfarm_sample<float>*, int,
         const float*, const float*, const float*, int, float, float);
+template void launch_windfarm_sensor_sample_g<float>(float*, const Windfarm_sensor_sample<float>*, int,
+        const float*, const float*, int, float, float);
+template void launch_windfarm_hub_mean_g<float>(float*, const float*, const float*, int, float,
+        int, int, int, int, int, int, float, float);
 template void launch_windfarm_scatter_g<float>(float*, const Windfarm_scatter<float>*, int,
         const Windfarm_force<float>*, int, int);
 template void launch_windfarm_add_source_g<float>(float*, const float*, int, int, int, int, int, int, int, int);
@@ -217,6 +367,10 @@ template class WindFarm<float>;
 #else
 template void launch_windfarm_sample_g<double>(double*, const Windfarm_sample<double>*, int,
         const double*, const double*, const double*, int, double, double);
+template void launch_windfarm_sensor_sample_g<double>(double*, const Windfarm_sensor_sample<double>*, int,
+        const double*, const double*, int, double, double);
+template void launch_windfarm_hub_mean_g<double>(double*, const double*, const double*, int, double,
+        int, int, int, int, int, int, double, double);
 template void launch_windfarm_scatter_g<double>(double*, const Windfarm_scatter<double>*, int,
         const Windfarm_force<double>*, int, int);
 template void launch_windfarm_add_source_g<double>(double*, const double*, int, int, int, int, int, int, int, int);

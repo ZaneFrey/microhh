@@ -82,6 +82,19 @@ namespace
     {
         hash_bytes(hash, &value, sizeof(T));
     }
+
+    template<typename TF>
+    TF wrap_angle(TF angle)
+    {
+        angle -= TF(360)*std::floor((angle+TF(180))/TF(360));
+        return angle;
+    }
+
+    template<typename TF>
+    TF angle_difference(const TF target, const TF current)
+    {
+        return wrap_angle(target-current);
+    }
 }
 
 template<typename TF>
@@ -102,12 +115,21 @@ WindFarm<TF>::WindFarm(
     cp_prime(TF(0.8)),
     tip_speed_ratio(TF(8)),
     sample_time(TF(0)),
+    yaw_memory_time(TF(60)),
+    yaw_update_time(TF(60)),
+    yaw_sensor_distance(TF(1)),
+    yaw_rate(TF(0.5)),
+    yaw_deadband(TF(2)),
     isample_time(0),
     istart_time(0),
+    iyaw_update_time(0),
+    dynamic_yaw(false),
     configuration_hash(0),
     created(false),
     device_prepared(false),
     suppress_first_output(false),
+    sensor_geometry_ready(false),
+    mean_warning_printed(false),
     last_update_time(std::numeric_limits<unsigned long>::max()),
     output_record(0)
 {
@@ -135,6 +157,16 @@ WindFarm<TF>::WindFarm(
     yaw_file = input.get_item<std::string>("windfarm", "wfyawfile", "", "");
     sample_time = input.get_item<TF>("windfarm", "sampletime", "s", TF(0));
     ct_prime = input.get_item<TF>("windfarm", "ctprime", "", TF(4)/TF(3));
+    dynamic_yaw = input.get_item<bool>("windfarm", "swdynamicyaw", "", false);
+
+    if (dynamic_yaw)
+    {
+        yaw_memory_time = input.get_item<TF>("windfarm", "yawmemtime", "s", TF(60));
+        yaw_update_time = input.get_item<TF>("windfarm", "yawupdatetime", "s", TF(60));
+        yaw_sensor_distance = input.get_item<TF>("windfarm", "yawsensordist", "", TF(1));
+        yaw_rate = input.get_item<TF>("windfarm", "yawrate", "degree s-1", TF(0.5));
+        yaw_deadband = input.get_item<TF>("windfarm", "yawdeadband", "degree", TF(2));
+    }
 
     if (sw_windfarm == Windfarm_type::Admr)
     {
@@ -175,6 +207,13 @@ void WindFarm<TF>::validate_configuration() const
         (!finite(cp_prime) || cp_prime < TF(0) || !finite(tip_speed_ratio) || tip_speed_ratio <= TF(0) ||
          (rotation_sign != TF(-1) && rotation_sign != TF(1))))
         throw std::runtime_error("Invalid ADMR power, tip-speed-ratio, or rotation-sign setting");
+    if (dynamic_yaw &&
+        (!finite(yaw_memory_time) || yaw_memory_time < TF(0) ||
+         !finite(yaw_update_time) || yaw_update_time < TF(0) ||
+         !finite(yaw_sensor_distance) || yaw_sensor_distance <= TF(0) ||
+         !finite(yaw_rate) || yaw_rate <= TF(0) ||
+         !finite(yaw_deadband) || yaw_deadband < TF(0) || yaw_deadband >= TF(180)))
+        throw std::runtime_error("Invalid dynamic-yaw memory, update, sensor-distance, rate, or deadband setting");
 }
 
 template<typename TF>
@@ -258,8 +297,15 @@ void WindFarm<TF>::read_turbines()
     turbines.resize(count);
     for (int n=0; n<count; ++n)
     {
-        turbines[n] = {ids[n], 0, 0, coordinates[2*n], coordinates[2*n+1], TF(0), TF(1), TF(0),
-                       TF(0), TF(0), TF(0), TF(0), TF(0), TF(0), TF(0), false};
+        Turbine turbine{};
+        turbine.id = ids[n];
+        turbine.x = coordinates[2*n];
+        turbine.y = coordinates[2*n+1];
+        turbine.nx = TF(1);
+        turbine.last_sensor_sample_time = std::numeric_limits<unsigned long>::max();
+        turbine.last_yaw_update_time = std::numeric_limits<unsigned long>::max();
+        turbine.last_rotor_sample_time = std::numeric_limits<unsigned long>::max();
+        turbines[n] = turbine;
     }
 }
 
@@ -326,14 +372,17 @@ void WindFarm<TF>::read_yaw()
                 [id=ids[n]](const Turbine& item) { return item.id == id; });
         if (turbine == turbines.end() || !matched.insert(ids[n]).second)
             throw std::runtime_error("The yaw file contains an unknown or duplicate turbine ID");
-        turbine->yaw = yaw[n];
+        turbine->yaw_offset = wrap_angle(yaw[n]);
     }
     if (matched.size() != turbines.size())
         throw std::runtime_error("The yaw file does not list every turbine ID");
+
+    for (auto& turbine : turbines)
+        turbine.rotor_yaw = turbine.yaw_offset;
 }
 
 template<typename TF>
-void WindFarm<TF>::build_geometry()
+void WindFarm<TF>::build_topology()
 {
     const auto& gd = grid.get_grid_data();
     const TF radius = diameter/TF(2);
@@ -348,16 +397,6 @@ void WindFarm<TF>::build_geometry()
             throw std::runtime_error("Wind-turbine hubs must lie strictly inside the horizontal domain");
         turbine.x = wrap_coordinate(turbine.x, gd.xsize);
         turbine.y = wrap_coordinate(turbine.y, gd.ysize);
-        const TF yaw_radians = turbine.yaw*TF(M_PI/180.);
-        turbine.nx = std::cos(yaw_radians);
-        turbine.ny = std::sin(yaw_radians);
-        const TF epsilon_n = std::sqrt(std::pow(turbine.nx*gd.dx, 2)+std::pow(turbine.ny*gd.dy, 2));
-        const TF epsilon_1 = std::sqrt(std::pow(turbine.ny*gd.dx, 2)+std::pow(turbine.nx*gd.dy, 2));
-        const TF gaussian_x = TF(3)*(std::abs(turbine.nx)*epsilon_n+std::abs(turbine.ny)*epsilon_1);
-        const TF gaussian_y = TF(3)*(std::abs(turbine.ny)*epsilon_n+std::abs(turbine.nx)*epsilon_1);
-        if (TF(2)*(radius*std::abs(turbine.ny)+gaussian_x) >= gd.xsize ||
-            TF(2)*(radius*std::abs(turbine.nx)+gaussian_y) >= gd.ysize)
-            throw std::runtime_error("A turbine rotor and Gaussian support overlap their own periodic image");
     }
 
     for (std::size_t a=0; a<turbines.size(); ++a)
@@ -385,24 +424,13 @@ void WindFarm<TF>::build_geometry()
             for (int l=0; l<azimuth_count; ++l)
             {
                 const TF theta = (TF(l)+TF(0.5))*dtheta;
-                const TF e1x = -turbine.ny;
-                const TF e1y = turbine.nx;
-                const TF er_x = std::cos(theta)*e1x;
-                const TF er_y = std::cos(theta)*e1y;
-                const TF er_z = std::sin(theta);
-                Windfarm_element<TF> element;
+                Windfarm_element<TF> element{};
                 element.turbine = int(t);
                 element.ring = j;
                 element.point = l;
-                element.x = wrap_coordinate(turbine.x+r*er_x, gd.xsize);
-                element.y = wrap_coordinate(turbine.y+r*er_y, gd.ysize);
-                element.z = hub_height+r*er_z;
                 element.r = r;
                 element.theta = theta;
                 element.area = area;
-                element.etheta_x = turbine.ny*er_z;
-                element.etheta_y = -turbine.nx*er_z;
-                element.etheta_z = turbine.nx*er_y-turbine.ny*er_x;
                 elements.push_back(element);
             }
         }
@@ -416,6 +444,43 @@ void WindFarm<TF>::build_geometry()
             throw std::runtime_error("The discrete actuator area does not equal the physical rotor area");
     }
     element_forces.resize(elements.size());
+}
+
+template<typename TF>
+void WindFarm<TF>::update_rotor_geometry()
+{
+    const auto& gd = grid.get_grid_data();
+    const TF radius = diameter/TF(2);
+    for (auto& turbine : turbines)
+    {
+        turbine.rotor_yaw = wrap_angle(turbine.rotor_yaw);
+        const TF yaw_radians = turbine.rotor_yaw*TF(M_PI/180.);
+        turbine.nx = std::cos(yaw_radians);
+        turbine.ny = std::sin(yaw_radians);
+        const TF epsilon_n = std::sqrt(std::pow(turbine.nx*gd.dx, 2)+std::pow(turbine.ny*gd.dy, 2));
+        const TF epsilon_1 = std::sqrt(std::pow(turbine.ny*gd.dx, 2)+std::pow(turbine.nx*gd.dy, 2));
+        const TF gaussian_x = TF(3)*(std::abs(turbine.nx)*epsilon_n+std::abs(turbine.ny)*epsilon_1);
+        const TF gaussian_y = TF(3)*(std::abs(turbine.ny)*epsilon_n+std::abs(turbine.nx)*epsilon_1);
+        if (TF(2)*(radius*std::abs(turbine.ny)+gaussian_x) >= gd.xsize ||
+            TF(2)*(radius*std::abs(turbine.nx)+gaussian_y) >= gd.ysize)
+            throw std::runtime_error("A turbine rotor and Gaussian support overlap their own periodic image");
+    }
+
+    for (auto& element : elements)
+    {
+        const Turbine& turbine = turbines[element.turbine];
+        const TF e1x = -turbine.ny;
+        const TF e1y = turbine.nx;
+        const TF er_x = std::cos(element.theta)*e1x;
+        const TF er_y = std::cos(element.theta)*e1y;
+        const TF er_z = std::sin(element.theta);
+        element.x = wrap_coordinate(turbine.x+element.r*er_x, gd.xsize);
+        element.y = wrap_coordinate(turbine.y+element.r*er_y, gd.ysize);
+        element.z = hub_height+element.r*er_z;
+        element.etheta_x = turbine.ny*er_z;
+        element.etheta_y = -turbine.nx*er_z;
+        element.etheta_z = turbine.nx*er_y-turbine.ny*er_x;
+    }
 }
 
 template<typename TF>
@@ -504,6 +569,51 @@ void WindFarm<TF>::build_sampling()
         samples.push_back(sample);
     }
     sums.resize(3*turbines.size());
+}
+
+template<typename TF>
+void WindFarm<TF>::build_sensor_sampling()
+{
+    const auto& gd = grid.get_grid_data();
+    sensor_samples.clear();
+    sensor_samples.reserve(elements.size());
+    for (const auto& element : elements)
+    {
+        const Turbine& turbine = turbines[element.turbine];
+        const TF yaw_radians = turbine.yaw_command*TF(M_PI/180.);
+        const TF nx = std::cos(yaw_radians);
+        const TF ny = std::sin(yaw_radians);
+        const TF center_x = turbine.x-yaw_sensor_distance*diameter*nx;
+        const TF center_y = turbine.y-yaw_sensor_distance*diameter*ny;
+        const TF er_x = -std::cos(element.theta)*ny;
+        const TF er_y = std::cos(element.theta)*nx;
+        const TF er_z = std::sin(element.theta);
+        const TF x = center_x+element.r*er_x;
+        const TF y = center_y+element.r*er_y;
+        const TF z = hub_height+element.r*er_z;
+        if (!(x > TF(0) && x < gd.xsize && y > TF(0) && y < gd.ysize))
+            throw std::runtime_error(
+                    "Dynamic-yaw sensor disk for turbine " + std::to_string(turbine.id) +
+                    " crosses a horizontal domain boundary");
+
+        const int global_i = std::min(gd.itot-1, int(std::floor(x/gd.dx)));
+        const int global_j = std::min(gd.jtot-1, int(std::floor(y/gd.dy)));
+        const int owner_x = global_i/gd.imax;
+        const int owner_y = global_j/gd.jmax;
+        Windfarm_sensor_sample<TF> sample{};
+        sample.owner = owner_x == master.get_MPI_data().mpicoordx &&
+                       owner_y == master.get_MPI_data().mpicoordy;
+        sample.turbine = element.turbine;
+        sample.area = element.area;
+        if (sample.owner)
+        {
+            sample.u = make_interpolation(x, y, z, 1, 0, 0);
+            sample.v = make_interpolation(x, y, z, 0, 1, 0);
+        }
+        sensor_samples.push_back(sample);
+    }
+    sensor_sums.resize(3*turbines.size());
+    sensor_geometry_ready = true;
 }
 
 template<typename TF>
@@ -600,8 +710,10 @@ void WindFarm<TF>::calculate_configuration_hash()
     configuration_hash = UINT64_C(1469598103934665603);
     const int model = int(sw_windfarm);
     hash_value(configuration_hash, model);
+    hash_value(configuration_hash, dynamic_yaw);
     for (const TF value : {diameter, hub_height, disk_memory_time, actuator_resolution,
-                            start_time, ramp_time, rotation_sign, ct_prime, cp_prime, tip_speed_ratio})
+                            start_time, ramp_time, rotation_sign, ct_prime, cp_prime, tip_speed_ratio,
+                            yaw_memory_time, yaw_update_time, yaw_sensor_distance, yaw_rate, yaw_deadband})
     {
         const float compact = float(value);
         hash_value(configuration_hash, compact);
@@ -609,7 +721,7 @@ void WindFarm<TF>::calculate_configuration_hash()
     for (const auto& turbine : turbines)
     {
         hash_value(configuration_hash, turbine.id);
-        for (const TF value : {turbine.x, turbine.y, turbine.yaw})
+        for (const TF value : {turbine.x, turbine.y, turbine.yaw_offset})
         {
             const float compact = float(value);
             hash_value(configuration_hash, compact);
@@ -635,14 +747,20 @@ void WindFarm<TF>::create(Timeloop<TF>& timeloop, const bool is_run)
     validate_configuration();
     read_turbines();
     read_yaw();
-    build_geometry();
-    build_sampling();
-    build_scatter();
+    build_topology();
     calculate_configuration_hash();
 
     isample_time = sample_time > TF(0) ? convert_to_itime(sample_time) : 0;
     istart_time = convert_to_itime(start_time);
-    load_restart(timeloop.get_iotime());
+    iyaw_update_time = yaw_update_time > TF(0) ? convert_to_itime(yaw_update_time) : 0;
+    if (dynamic_yaw && yaw_update_time > TF(0) && iyaw_update_time == 0)
+        throw std::runtime_error("[windfarm][yawupdatetime] is smaller than the time precision");
+    load_restart(timeloop.get_iotime(), timeloop.get_itime());
+    update_rotor_geometry();
+    build_sampling();
+    build_scatter();
+    if (dynamic_yaw && turbines.front().last_sensor_sample_time != std::numeric_limits<unsigned long>::max())
+        build_sensor_sampling();
     suppress_first_output = suppress_first_output && is_sample_time(timeloop.get_itime());
     create_output(timeloop.get_iotime());
     created = true;
@@ -651,7 +769,7 @@ void WindFarm<TF>::create(Timeloop<TF>& timeloop, const bool is_run)
 }
 
 template<typename TF>
-void WindFarm<TF>::update_host()
+void WindFarm<TF>::update_rotor_host()
 {
     std::fill(sums.begin(), sums.end(), TF(0));
     const TF* const u = fields.mp.at("u")->fld.data();
@@ -674,15 +792,58 @@ void WindFarm<TF>::update_host()
 }
 
 template<typename TF>
-void WindFarm<TF>::calculate_forces(const TF time, const TF dt)
+void WindFarm<TF>::update_sensor_host()
+{
+    std::fill(sensor_sums.begin(), sensor_sums.end(), TF(0));
+    const TF* const u = fields.mp.at("u")->fld.data();
+    const TF* const v = fields.mp.at("v")->fld.data();
+    const auto& gd = grid.get_grid_data();
+    for (const auto& sample : sensor_samples)
+    {
+        if (!sample.owner)
+            continue;
+        sensor_sums[3*sample.turbine] += (interpolate(u, sample.u)+gd.utrans)*sample.area;
+        sensor_sums[3*sample.turbine+1] += (interpolate(v, sample.v)+gd.vtrans)*sample.area;
+        sensor_sums[3*sample.turbine+2] += sample.area;
+    }
+    master.sum(sensor_sums.data(), int(sensor_sums.size()));
+}
+
+template<typename TF>
+void WindFarm<TF>::calculate_hub_mean_host(TF& u_mean, TF& v_mean)
+{
+    const auto& gd = grid.get_grid_data();
+    int k0 = gd.kstart-1;
+    while (k0+1 < gd.kend+1 && gd.z[k0+1] <= hub_height)
+        ++k0;
+    if (k0 < 0 || k0+1 >= gd.kcells || gd.z[k0+1] == gd.z[k0])
+        throw std::runtime_error("Cannot bracket the turbine hub height on the vertical grid");
+    const TF weight = (hub_height-gd.z[k0])/(gd.z[k0+1]-gd.z[k0]);
+    const TF* const u = fields.mp.at("u")->fld.data();
+    const TF* const v = fields.mp.at("v")->fld.data();
+    hub_sums.assign(2, TF(0));
+    for (int j=gd.jstart; j<gd.jend; ++j)
+        for (int i=gd.istart; i<gd.iend; ++i)
+        {
+            const int index0 = i+j*gd.icells+k0*gd.ijcells;
+            const int index1 = index0+gd.ijcells;
+            hub_sums[0] += (TF(1)-weight)*u[index0]+weight*u[index1]+gd.utrans;
+            hub_sums[1] += (TF(1)-weight)*v[index0]+weight*v[index1]+gd.vtrans;
+        }
+    master.sum(hub_sums.data(), int(hub_sums.size()));
+    const TF horizontal_count = TF(gd.itot)*TF(gd.jtot);
+    u_mean = hub_sums[0]/horizontal_count;
+    v_mean = hub_sums[1]/horizontal_count;
+}
+
+template<typename TF>
+void WindFarm<TF>::calculate_forces(const TF time, const unsigned long itime)
 {
     const TF disk_area = TF(M_PI)*diameter*diameter/TF(4);
     TF gamma = TF(0);
     if (time >= start_time)
         gamma = ramp_time > TF(0) ? TF(1)-std::exp(-(time-start_time)/ramp_time) : TF(1);
     gamma = std::max(TF(0), std::min(TF(1), gamma));
-    const TF alpha = disk_memory_time > TF(0) ? TF(1)-std::exp(-dt/disk_memory_time) : TF(1);
-
     for (std::size_t t=0; t<turbines.size(); ++t)
     {
         Turbine& turbine = turbines[t];
@@ -697,7 +858,13 @@ void WindFarm<TF>::calculate_forces(const TF time, const TF dt)
             turbine.filter_valid = true;
         }
         else
+        {
+            const TF elapsed = TF(itime-turbine.last_rotor_sample_time)/TF(ifactor);
+            const TF alpha = disk_memory_time > TF(0) ?
+                    TF(1)-std::exp(-elapsed/disk_memory_time) : TF(1);
             turbine.filtered_velocity += alpha*(turbine.raw_velocity-turbine.filtered_velocity);
+        }
+        turbine.last_rotor_sample_time = itime;
 
         const TF load_velocity = turbine.filtered_velocity > TF(1.e-6) ? turbine.filtered_velocity : TF(0);
         turbine.thrust = gamma*TF(0.5)*turbine.density*disk_area*ct_prime*load_velocity*load_velocity;
@@ -742,9 +909,165 @@ void WindFarm<TF>::calculate_forces(const TF time, const TF dt)
 }
 
 template<typename TF>
+void WindFarm<TF>::initialize_dynamic_yaw(const unsigned long itime)
+{
+    TF u_mean;
+    TF v_mean;
+    #ifdef USECUDA
+    calculate_hub_mean_g(u_mean, v_mean);
+    #else
+    calculate_hub_mean_host(u_mean, v_mean);
+    #endif
+    const TF speed = std::sqrt(u_mean*u_mean+v_mean*v_mean);
+    TF initial_command = TF(0);
+    if (speed > TF(1.e-6))
+        initial_command = wrap_angle(std::atan2(v_mean, u_mean)*TF(180./M_PI));
+    else if (!mean_warning_printed)
+    {
+        master.print_warning(
+                "Horizontal mean wind at turbine hub height is too small to initialize dynamic yaw; "
+                "retaining a zero-degree command\n");
+        mean_warning_printed = true;
+    }
+    for (auto& turbine : turbines)
+        turbine.yaw_command = initial_command;
+    build_sensor_sampling();
+    #ifdef USECUDA
+    refresh_sensor_device();
+    update_sensor_g();
+    #else
+    update_sensor_host();
+    #endif
+    filter_sensor(itime);
+    update_yaw_controller(itime);
+}
+
+template<typename TF>
+void WindFarm<TF>::filter_sensor(const unsigned long itime)
+{
+    for (std::size_t t=0; t<turbines.size(); ++t)
+    {
+        Turbine& turbine = turbines[t];
+        const TF actual_area = sensor_sums[3*t+2];
+        if (!(actual_area > TF(0)) || !std::isfinite(actual_area))
+            throw std::runtime_error("A dynamic-yaw sensor disk has no owned sampling area");
+        turbine.sensor_u_raw = sensor_sums[3*t]/actual_area;
+        turbine.sensor_v_raw = sensor_sums[3*t+1]/actual_area;
+        if (!std::isfinite(turbine.sensor_u_raw) || !std::isfinite(turbine.sensor_v_raw))
+            throw std::runtime_error("A dynamic-yaw sensor disk produced a non-finite velocity");
+        if (!turbine.sensor_filter_valid)
+        {
+            turbine.sensor_u_filtered = turbine.sensor_u_raw;
+            turbine.sensor_v_filtered = turbine.sensor_v_raw;
+            turbine.sensor_filter_valid = true;
+        }
+        else
+        {
+            const TF elapsed = TF(itime-turbine.last_sensor_sample_time)/TF(ifactor);
+            const TF alpha = yaw_memory_time > TF(0) ?
+                    TF(1)-std::exp(-elapsed/yaw_memory_time) : TF(1);
+            turbine.sensor_u_filtered += alpha*(turbine.sensor_u_raw-turbine.sensor_u_filtered);
+            turbine.sensor_v_filtered += alpha*(turbine.sensor_v_raw-turbine.sensor_v_filtered);
+        }
+        turbine.last_sensor_sample_time = itime;
+    }
+}
+
+template<typename TF>
+void WindFarm<TF>::update_yaw_controller(const unsigned long itime)
+{
+    std::vector<TF> commands(turbines.size());
+    std::vector<TF> rotor_yaw(turbines.size());
+    std::vector<signed char> initialized(turbines.size());
+    for (std::size_t t=0; t<turbines.size(); ++t)
+    {
+        commands[t] = turbines[t].yaw_command;
+        rotor_yaw[t] = turbines[t].rotor_yaw;
+        initialized[t] = turbines[t].yaw_initialized;
+    }
+
+    if (master.get_mpiid() == 0)
+        for (std::size_t t=0; t<turbines.size(); ++t)
+        {
+            const Turbine& turbine = turbines[t];
+            const TF u = turbine.sensor_u_filtered;
+            const TF v = turbine.sensor_v_filtered;
+            const TF speed = std::sqrt(u*u+v*v);
+            if (!turbine.sensor_filter_valid || speed <= TF(1.e-6))
+                continue;
+            const TF command_radians = turbine.yaw_command*TF(M_PI/180.);
+            if (u*std::cos(command_radians)+v*std::sin(command_radians) <= TF(0))
+                continue;
+
+            const TF candidate = wrap_angle(std::atan2(v, u)*TF(180./M_PI));
+            const TF desired = wrap_angle(candidate+turbine.yaw_offset);
+            const TF error = angle_difference(desired, turbine.rotor_yaw);
+            if (turbine.yaw_initialized && std::abs(error) <= yaw_deadband)
+                continue;
+
+            commands[t] = candidate;
+            if (!turbine.yaw_initialized)
+            {
+                rotor_yaw[t] = desired;
+                initialized[t] = 1;
+            }
+            else
+            {
+                const TF elapsed = TF(itime-turbine.last_yaw_update_time)/TF(ifactor);
+                const TF limit = yaw_rate*elapsed;
+                rotor_yaw[t] = wrap_angle(turbine.rotor_yaw+std::max(-limit, std::min(limit, error)));
+            }
+        }
+
+    master.broadcast(commands.data(), int(commands.size()));
+    master.broadcast(rotor_yaw.data(), int(rotor_yaw.size()));
+    master.broadcast(initialized.data(), int(initialized.size()));
+    bool sensor_changed = false;
+    bool rotor_changed = false;
+    for (std::size_t t=0; t<turbines.size(); ++t)
+    {
+        sensor_changed = sensor_changed || commands[t] != turbines[t].yaw_command;
+        rotor_changed = rotor_changed || rotor_yaw[t] != turbines[t].rotor_yaw;
+        turbines[t].yaw_command = wrap_angle(commands[t]);
+        turbines[t].rotor_yaw = wrap_angle(rotor_yaw[t]);
+        turbines[t].yaw_initialized = initialized[t];
+        turbines[t].last_yaw_update_time = itime;
+    }
+    rebuild_yaw_geometry(sensor_changed, rotor_changed);
+}
+
+template<typename TF>
+void WindFarm<TF>::rebuild_yaw_geometry(const bool sensor_changed, const bool rotor_changed)
+{
+    if (sensor_changed)
+    {
+        build_sensor_sampling();
+        #ifdef USECUDA
+        refresh_sensor_device();
+        #endif
+    }
+    if (rotor_changed)
+    {
+        update_rotor_geometry();
+        build_sampling();
+        build_scatter();
+        #ifdef USECUDA
+        refresh_rotor_device();
+        #endif
+    }
+}
+
+template<typename TF>
 bool WindFarm<TF>::is_sample_time(const unsigned long itime) const
 {
     return itime >= istart_time && (isample_time == 0 || (itime-istart_time)%isample_time == 0);
+}
+
+template<typename TF>
+bool WindFarm<TF>::is_yaw_update_time(const unsigned long itime) const
+{
+    return dynamic_yaw && itime >= istart_time &&
+           (iyaw_update_time == 0 || (itime-istart_time)%iyaw_update_time == 0);
 }
 
 template<typename TF>
@@ -752,12 +1075,29 @@ void WindFarm<TF>::update(Timeloop<TF>& timeloop)
 {
     if (!created || timeloop.in_substep() || timeloop.get_itime() == last_update_time)
         return;
+    const unsigned long itime = timeloop.get_itime();
+    if (dynamic_yaw && itime >= istart_time)
+    {
+        if (!sensor_geometry_ready)
+            initialize_dynamic_yaw(itime);
+        else
+        {
+            #ifdef USECUDA
+            update_sensor_g();
+            #else
+            update_sensor_host();
+            #endif
+            filter_sensor(itime);
+            if (is_yaw_update_time(itime))
+                update_yaw_controller(itime);
+        }
+    }
     #ifdef USECUDA
-    update_g();
+    update_rotor_g();
     #else
-    update_host();
+    update_rotor_host();
     #endif
-    calculate_forces(TF(timeloop.get_time()), TF(timeloop.get_dt()));
+    calculate_forces(TF(timeloop.get_time()), itime);
     #ifdef USECUDA
     cuda_copy(element_forces, element_forces_g);
     for (int component=0; component<3; ++component)
@@ -765,8 +1105,8 @@ void WindFarm<TF>::update(Timeloop<TF>& timeloop)
                                 int(scatter_g[component].size()), element_forces_g.data(),
                                 grid.get_grid_data().ncells, component);
     #endif
-    last_update_time = timeloop.get_itime();
-    if (is_sample_time(timeloop.get_itime()))
+    last_update_time = itime;
+    if (is_sample_time(itime))
     {
         if (suppress_first_output)
             suppress_first_output = false;
@@ -805,10 +1145,20 @@ unsigned long WindFarm<TF>::get_time_limit(const unsigned long itime) const
         return Constants::ulhuge;
     if (itime < istart_time)
         return istart_time-itime;
-    if (isample_time == 0)
-        return Constants::ulhuge;
-    const unsigned long remainder = (itime-istart_time)%isample_time;
-    return remainder == 0 ? isample_time : isample_time-remainder;
+    unsigned long limit = Constants::ulhuge;
+    if (isample_time > 0)
+    {
+        const unsigned long remainder = (itime-istart_time)%isample_time;
+        limit = remainder == 0 ? isample_time : isample_time-remainder;
+    }
+    if (dynamic_yaw && iyaw_update_time > 0)
+    {
+        const unsigned long remainder = (itime-istart_time)%iyaw_update_time;
+        const unsigned long yaw_limit = remainder == 0 ?
+                iyaw_update_time : iyaw_update_time-remainder;
+        limit = std::min(limit, yaw_limit);
+    }
+    return limit;
 }
 
 template<typename TF>
@@ -823,6 +1173,14 @@ void WindFarm<TF>::create_output(const int iotime)
     time_var = std::make_unique<Netcdf_variable<TF>>(output_file->template add_variable<TF>("time", {"time"}));
     id_var = std::make_unique<Netcdf_variable<int>>(output_file->template add_variable<int>("id", {"turbine"}));
     yaw_var = std::make_unique<Netcdf_variable<TF>>(output_file->template add_variable<TF>("yaw", {"time", "turbine"}));
+    yaw_command_var = std::make_unique<Netcdf_variable<TF>>(
+            output_file->template add_variable<TF>("yaw_command", {"time", "turbine"}));
+    yaw_offset_var = std::make_unique<Netcdf_variable<TF>>(
+            output_file->template add_variable<TF>("yaw_offset", {"turbine"}));
+    sensor_u_var = std::make_unique<Netcdf_variable<TF>>(
+            output_file->template add_variable<TF>("sensor_u", {"time", "turbine"}));
+    sensor_v_var = std::make_unique<Netcdf_variable<TF>>(
+            output_file->template add_variable<TF>("sensor_v", {"time", "turbine"}));
     raw_velocity_var = std::make_unique<Netcdf_variable<TF>>(output_file->template add_variable<TF>("raw_velocity", {"time", "turbine"}));
     filtered_velocity_var = std::make_unique<Netcdf_variable<TF>>(output_file->template add_variable<TF>("filtered_velocity", {"time", "turbine"}));
     thrust_var = std::make_unique<Netcdf_variable<TF>>(output_file->template add_variable<TF>("thrust", {"time", "turbine"}));
@@ -832,7 +1190,15 @@ void WindFarm<TF>::create_output(const int iotime)
     time_var->add_attribute("units", "s");
     time_var->add_attribute("long_name", "Physical time");
     yaw_var->add_attribute("units", "degree");
-    yaw_var->add_attribute("long_name", "Static turbine yaw offset");
+    yaw_var->add_attribute("long_name", "Physical turbine rotor yaw angle");
+    yaw_command_var->add_attribute("units", "degree");
+    yaw_command_var->add_attribute("long_name", "Dynamic-yaw commanded wind direction");
+    yaw_offset_var->add_attribute("units", "degree");
+    yaw_offset_var->add_attribute("long_name", "Prescribed turbine yaw offset");
+    sensor_u_var->add_attribute("units", "m s-1");
+    sensor_u_var->add_attribute("long_name", "Filtered upstream-sensor u velocity");
+    sensor_v_var->add_attribute("units", "m s-1");
+    sensor_v_var->add_attribute("long_name", "Filtered upstream-sensor v velocity");
     raw_velocity_var->add_attribute("units", "m s-1");
     raw_velocity_var->add_attribute("long_name", "Raw disk-normal velocity");
     filtered_velocity_var->add_attribute("units", "m s-1");
@@ -844,15 +1210,23 @@ void WindFarm<TF>::create_output(const int iotime)
     power_var->add_attribute("units", "W");
     power_var->add_attribute("long_name", "Applied rotor power");
     std::vector<int> ids(turbines.size());
+    std::vector<TF> yaw_offset(turbines.size());
     for (std::size_t n=0; n<turbines.size(); ++n)
+    {
         ids[n] = turbines[n].id;
+        yaw_offset[n] = turbines[n].yaw_offset;
+    }
     id_var->insert(ids, {0}, {int(ids.size())});
+    yaw_offset_var->insert(yaw_offset, {0}, {int(yaw_offset.size())});
 }
 
 template<typename TF>
 void WindFarm<TF>::write_output(const Timeloop<TF>& timeloop)
 {
     std::vector<TF> yaw(turbines.size());
+    std::vector<TF> yaw_command(turbines.size());
+    std::vector<TF> sensor_u(turbines.size());
+    std::vector<TF> sensor_v(turbines.size());
     std::vector<TF> raw(turbines.size());
     std::vector<TF> filtered(turbines.size());
     std::vector<TF> thrust(turbines.size());
@@ -860,7 +1234,10 @@ void WindFarm<TF>::write_output(const Timeloop<TF>& timeloop)
     std::vector<TF> power(turbines.size());
     for (std::size_t n=0; n<turbines.size(); ++n)
     {
-        yaw[n] = turbines[n].yaw;
+        yaw[n] = turbines[n].rotor_yaw;
+        yaw_command[n] = turbines[n].yaw_command;
+        sensor_u[n] = turbines[n].sensor_u_filtered;
+        sensor_v[n] = turbines[n].sensor_v_filtered;
         raw[n] = turbines[n].raw_velocity;
         filtered[n] = turbines[n].filtered_velocity;
         thrust[n] = turbines[n].thrust;
@@ -873,6 +1250,9 @@ void WindFarm<TF>::write_output(const Timeloop<TF>& timeloop)
     iter_var->insert(timeloop.get_iteration(), {record});
     time_var->insert(TF(timeloop.get_time()), {record});
     yaw_var->insert(yaw, start, count);
+    yaw_command_var->insert(yaw_command, start, count);
+    sensor_u_var->insert(sensor_u, start, count);
+    sensor_v_var->insert(sensor_v, start, count);
     raw_velocity_var->insert(raw, start, count);
     filtered_velocity_var->insert(filtered, start, count);
     thrust_var->insert(thrust, start, count);
@@ -894,7 +1274,7 @@ void WindFarm<TF>::save(const int iotime)
     if (!file)
         throw std::runtime_error("Cannot create wind-farm restart file");
     const char magic[8] = {'M','H','H','W','F','R','S','T'};
-    const std::uint32_t version = 1;
+    const std::uint32_t version = 2;
     const std::uint32_t count = std::uint32_t(turbines.size());
     file.write(magic, sizeof(magic));
     file.write(reinterpret_cast<const char*>(&version), sizeof(version));
@@ -903,23 +1283,44 @@ void WindFarm<TF>::save(const int iotime)
     for (const auto& turbine : turbines)
     {
         const std::int32_t id = turbine.id;
+        const float yaw_offset = float(turbine.yaw_offset);
+        const float yaw_command = float(turbine.yaw_command);
+        const float rotor_yaw = float(turbine.rotor_yaw);
+        const float sensor_u = float(turbine.sensor_u_filtered);
+        const float sensor_v = float(turbine.sensor_v_filtered);
+        const std::uint8_t sensor_valid = turbine.sensor_filter_valid;
+        const std::uint8_t yaw_initialized = turbine.yaw_initialized;
         const float velocity = float(turbine.filtered_velocity);
         const std::uint8_t valid = turbine.filter_valid;
+        const std::uint64_t last_sensor = turbine.last_sensor_sample_time;
+        const std::uint64_t last_yaw = turbine.last_yaw_update_time;
+        const std::uint64_t last_rotor = turbine.last_rotor_sample_time;
         file.write(reinterpret_cast<const char*>(&id), sizeof(id));
+        file.write(reinterpret_cast<const char*>(&yaw_offset), sizeof(yaw_offset));
+        file.write(reinterpret_cast<const char*>(&yaw_command), sizeof(yaw_command));
+        file.write(reinterpret_cast<const char*>(&rotor_yaw), sizeof(rotor_yaw));
+        file.write(reinterpret_cast<const char*>(&sensor_u), sizeof(sensor_u));
+        file.write(reinterpret_cast<const char*>(&sensor_v), sizeof(sensor_v));
+        file.write(reinterpret_cast<const char*>(&sensor_valid), sizeof(sensor_valid));
+        file.write(reinterpret_cast<const char*>(&yaw_initialized), sizeof(yaw_initialized));
         file.write(reinterpret_cast<const char*>(&velocity), sizeof(velocity));
         file.write(reinterpret_cast<const char*>(&valid), sizeof(valid));
+        file.write(reinterpret_cast<const char*>(&last_sensor), sizeof(last_sensor));
+        file.write(reinterpret_cast<const char*>(&last_yaw), sizeof(last_yaw));
+        file.write(reinterpret_cast<const char*>(&last_rotor), sizeof(last_rotor));
     }
     if (!file)
         throw std::runtime_error("Failed while writing the wind-farm restart file");
 }
 
 template<typename TF>
-void WindFarm<TF>::load_restart(const int iotime)
+void WindFarm<TF>::load_restart(const int iotime, const unsigned long itime)
 {
     if (iotime == 0)
         return;
-    std::vector<float> velocities(turbines.size());
-    std::vector<signed char> valid(turbines.size());
+    std::vector<float> state(6*turbines.size());
+    std::vector<signed char> flags(3*turbines.size());
+    std::vector<unsigned long> times(3*turbines.size());
     int read_ok = 1;
     if (master.get_mpiid() == 0)
     {
@@ -933,30 +1334,81 @@ void WindFarm<TF>::load_restart(const int iotime)
         if (!file || !file.read(magic, sizeof(magic)) || !file.read(reinterpret_cast<char*>(&version), sizeof(version)) ||
             !file.read(reinterpret_cast<char*>(&count), sizeof(count)) ||
             !file.read(reinterpret_cast<char*>(&hash), sizeof(hash)) ||
-            std::memcmp(magic, "MHHWFRST", 8) != 0 || version != 1 || count != turbines.size() ||
+            std::memcmp(magic, "MHHWFRST", 8) != 0 || version != 2 || count != turbines.size() ||
             hash != configuration_hash)
             read_ok = 0;
         for (std::size_t n=0; read_ok && n<turbines.size(); ++n)
         {
             std::int32_t id;
+            float yaw_offset;
+            std::uint8_t sensor_valid;
+            std::uint8_t yaw_initialized;
             std::uint8_t is_valid;
+            std::uint64_t last_sensor;
+            std::uint64_t last_yaw;
+            std::uint64_t last_rotor;
             if (!file.read(reinterpret_cast<char*>(&id), sizeof(id)) ||
-                !file.read(reinterpret_cast<char*>(&velocities[n]), sizeof(float)) ||
-                !file.read(reinterpret_cast<char*>(&is_valid), sizeof(is_valid)) || id != turbines[n].id ||
-                !std::isfinite(velocities[n]) || is_valid > 1)
+                !file.read(reinterpret_cast<char*>(&yaw_offset), sizeof(yaw_offset)) ||
+                !file.read(reinterpret_cast<char*>(&state[6*n+1]), sizeof(float)) ||
+                !file.read(reinterpret_cast<char*>(&state[6*n+2]), sizeof(float)) ||
+                !file.read(reinterpret_cast<char*>(&state[6*n+3]), sizeof(float)) ||
+                !file.read(reinterpret_cast<char*>(&state[6*n+4]), sizeof(float)) ||
+                !file.read(reinterpret_cast<char*>(&sensor_valid), sizeof(sensor_valid)) ||
+                !file.read(reinterpret_cast<char*>(&yaw_initialized), sizeof(yaw_initialized)) ||
+                !file.read(reinterpret_cast<char*>(&state[6*n+5]), sizeof(float)) ||
+                !file.read(reinterpret_cast<char*>(&is_valid), sizeof(is_valid)) ||
+                !file.read(reinterpret_cast<char*>(&last_sensor), sizeof(last_sensor)) ||
+                !file.read(reinterpret_cast<char*>(&last_yaw), sizeof(last_yaw)) ||
+                !file.read(reinterpret_cast<char*>(&last_rotor), sizeof(last_rotor)) ||
+                id != turbines[n].id || yaw_offset != float(turbines[n].yaw_offset) ||
+                !std::isfinite(yaw_offset) || !std::isfinite(state[6*n+1]) ||
+                !std::isfinite(state[6*n+2]) || !std::isfinite(state[6*n+3]) ||
+                !std::isfinite(state[6*n+4]) || !std::isfinite(state[6*n+5]) ||
+                state[6*n+1] < -180.f || state[6*n+1] >= 180.f ||
+                state[6*n+2] < -180.f || state[6*n+2] >= 180.f ||
+                sensor_valid > 1 || yaw_initialized > 1 || is_valid > 1 ||
+                (sensor_valid != (last_sensor != std::numeric_limits<std::uint64_t>::max())) ||
+                (is_valid != (last_rotor != std::numeric_limits<std::uint64_t>::max())) ||
+                (sensor_valid && (last_sensor < istart_time || last_sensor > itime)) ||
+                (last_yaw != std::numeric_limits<std::uint64_t>::max() &&
+                 (last_yaw < istart_time || last_yaw > itime)) ||
+                (yaw_initialized && last_yaw == std::numeric_limits<std::uint64_t>::max()) ||
+                (is_valid && last_rotor > itime) || yaw_initialized > sensor_valid ||
+                (!dynamic_yaw && (sensor_valid || yaw_initialized ||
+                                  last_yaw != std::numeric_limits<std::uint64_t>::max() ||
+                                  state[6*n+1] != 0.f || state[6*n+2] != yaw_offset)))
                 read_ok = 0;
-            valid[n] = static_cast<signed char>(is_valid);
+            else
+            {
+                state[6*n] = yaw_offset;
+                flags[3*n] = static_cast<signed char>(sensor_valid);
+                flags[3*n+1] = static_cast<signed char>(yaw_initialized);
+                flags[3*n+2] = static_cast<signed char>(is_valid);
+                times[3*n] = static_cast<unsigned long>(last_sensor);
+                times[3*n+1] = static_cast<unsigned long>(last_yaw);
+                times[3*n+2] = static_cast<unsigned long>(last_rotor);
+            }
         }
     }
     master.broadcast(&read_ok, 1);
     if (!read_ok)
         throw std::runtime_error("Missing, corrupt, or incompatible wind-farm restart state");
-    master.broadcast(velocities.data(), int(velocities.size()));
-    master.broadcast(valid.data(), int(valid.size()));
+    master.broadcast(state.data(), int(state.size()));
+    master.broadcast(flags.data(), int(flags.size()));
+    master.broadcast(times.data(), int(times.size()));
     for (std::size_t n=0; n<turbines.size(); ++n)
     {
-        turbines[n].filtered_velocity = TF(velocities[n]);
-        turbines[n].filter_valid = valid[n];
+        turbines[n].yaw_command = TF(state[6*n+1]);
+        turbines[n].rotor_yaw = TF(state[6*n+2]);
+        turbines[n].sensor_u_filtered = TF(state[6*n+3]);
+        turbines[n].sensor_v_filtered = TF(state[6*n+4]);
+        turbines[n].sensor_filter_valid = flags[3*n];
+        turbines[n].yaw_initialized = flags[3*n+1];
+        turbines[n].filtered_velocity = TF(state[6*n+5]);
+        turbines[n].filter_valid = flags[3*n+2];
+        turbines[n].last_sensor_sample_time = times[3*n];
+        turbines[n].last_yaw_update_time = times[3*n+1];
+        turbines[n].last_rotor_sample_time = times[3*n+2];
     }
     suppress_first_output = true;
 }
