@@ -27,9 +27,8 @@ import collections
 import glob
 import numpy as np
 from multiprocessing import Pool, set_start_method
-import platform
 
-if platform.system() == 'Darwin':
+if os.name == 'posix':
     set_start_method('fork')
 
 def convert_to_nc(variables):

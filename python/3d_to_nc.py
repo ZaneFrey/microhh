@@ -27,7 +27,10 @@ import glob
 import struct
 import time as tm
 import numpy as np
-from multiprocessing import Pool
+from multiprocessing import Pool, set_start_method
+
+if os.name == 'posix':
+    set_start_method('fork')
 
 def convert_to_nc(variables):
     half_level_vars = ['w', 'lflx', 'sflx']
