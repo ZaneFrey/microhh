@@ -1,0 +1,2 @@
+# turbine_id x y
+0   0.9 0.36

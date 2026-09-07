@@ -1,0 +1,2 @@
+# turbine_id yaw
+0   0
