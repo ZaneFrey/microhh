@@ -11,11 +11,21 @@
 #include "stats.h"
 #include "thermo.h"
 #include "tools.h"
+#include <cub/block/block_reduce.cuh>
+#include <climits>
 #include <limits>
 #include <type_traits>
 
 namespace
 {
+    struct Maximum
+    {
+        __device__ double operator()(const double a,const double b) const
+        {
+            return fmax(a,b);
+        }
+    };
+
     __device__ void atomic_max_nonnegative(double* address,const double value)
     {
         auto* bits=reinterpret_cast<unsigned long long*>(address);
@@ -139,12 +149,40 @@ namespace
     {const int i=blockIdx.x*blockDim.x+threadIdx.x,j=blockIdx.y*blockDim.y+threadIdx.y;if(i<icells&&j<jcells){const int b=i+j*icells+kstart*kk,t=i+j*icells+(kend-1)*kk;f[b-kk]=f[b];f[t+kk]=f[t];}}
 
     __global__ void timestep_init_g(int* invalid,double* maximum)
-    {if(!blockIdx.x&&!threadIdx.x){invalid[0]=0;invalid[1]=0;maximum[0]=0.;maximum[1]=0.;maximum[2]=0.;maximum[3]=0.;}}
-    template<typename TF> __global__ void timestep_variable_g(
+    {if(!blockIdx.x&&!threadIdx.x){invalid[0]=0;invalid[1]=INT_MAX;maximum[0]=0.;maximum[1]=0.;maximum[2]=0.;maximum[3]=0.;}}
+    template<typename TF,int block_size> __global__ void timestep_variable_g(
         int* invalid,double* maximum,const TF* coeff,const TF molecular,const TF* dzi,
         const double dx2i,const double dy2i,const int istart,const int iend,const int jstart,const int jend,
         const int kstart,const int kend,const int jj,const int kk)
-    {if(blockIdx.x||threadIdx.x)return;for(int k=kstart;k<kend;++k)for(int j=jstart;j<jend;++j)for(int i=istart;i<iend;++i){const int n=i+j*jj+k*kk;const double sgs=coeff?double(coeff[n]):0.;const double H=dx2i+dy2i+double(dzi[k])*double(dzi[k]);const double value=(sgs+double(molecular))*H;if(!isfinite(sgs)||sgs<0.||!isfinite(value)||value<0.){invalid[0]=1;invalid[1]=n;maximum[1]=sgs;maximum[2]=double(molecular);maximum[3]=H;return;}maximum[0]=fmax(maximum[0],value);}}
+    {
+        using Block_reduce = cub::BlockReduce<double,block_size>;
+        __shared__ typename Block_reduce::TempStorage storage;
+
+        const int nx=iend-istart,ny=jend-jstart,nz=kend-kstart;
+        const int cell=blockIdx.x*blockDim.x+threadIdx.x;
+        double local_max=0.;
+        if(cell<nx*ny*nz)
+        {
+            const int i=istart+cell%nx;
+            const int j=jstart+(cell/nx)%ny;
+            const int k=kstart+cell/(nx*ny);
+            const int n=i+j*jj+k*kk;
+            const double sgs=coeff?double(coeff[n]):0.;
+            const double H=dx2i+dy2i+double(dzi[k])*double(dzi[k]);
+            const double value=(sgs+double(molecular))*H;
+            if(!isfinite(sgs)||sgs<0.||!isfinite(value)||value<0.)
+            {
+                atomicExch(&invalid[0],1);
+                atomicMin(&invalid[1],n);
+            }
+            else
+                local_max=value;
+        }
+
+        const double block_max=Block_reduce(storage).Reduce(local_max,Maximum{});
+        if(threadIdx.x==0)
+            atomic_max_nonnegative(maximum,block_max);
+    }
 
 }
 
@@ -253,12 +291,27 @@ double Diff_amd2<TF>::get_dn(const double dt)
 {
     auto& gd=grid.get_grid_data();
     timestep_init_g<<<1,1>>>(timestep_error_g,compact_max_g);
+    constexpr int block_size=256;
+    const int ncells=gd.imax*gd.jmax*gd.kmax;
+    const int nblocks=(ncells+block_size-1)/block_size;
     auto check=[&](const std::string& name,const TF* coeff,const TF molecular)
     {
-        timestep_variable_g<TF><<<1,1>>>(timestep_error_g,compact_max_g,coeff,molecular,gd.dzi_g,
+        timestep_variable_g<TF,block_size><<<nblocks,block_size>>>(timestep_error_g,compact_max_g,coeff,molecular,gd.dzi_g,
             1./(double(gd.dx)*double(gd.dx)),1./(double(gd.dy)*double(gd.dy)),gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
         int invalid[2];cudaMemcpy(invalid,timestep_error_g,2*sizeof(int),cudaMemcpyDeviceToHost);
-        if(invalid[0]){double details[4];cudaMemcpy(details,compact_max_g,4*sizeof(double),cudaMemcpyDeviceToHost);const int n=int(invalid[1]);const int k=n/gd.ijcells;const int rem=n-k*gd.ijcells;const int j=rem/gd.icells;const int i=rem-j*gd.icells;throw std::runtime_error("AMD_TIMESTEP_INVALID variable="+name+" sgs="+std::to_string(details[1])+" molecular="+std::to_string(details[2])+" metric="+std::to_string(details[3])+" i="+std::to_string(i)+" j="+std::to_string(j)+" k="+std::to_string(k)+" rank="+std::to_string(master.get_mpiid()));}
+        if(invalid[0])
+        {
+            const int n=invalid[1];
+            const int k=n/gd.ijcells;
+            const int rem=n-k*gd.ijcells;
+            const int j=rem/gd.icells;
+            const int i=rem-j*gd.icells;
+            TF sgs_tf=TF(0),dzi_tf;
+            if(coeff)cudaMemcpy(&sgs_tf,coeff+n,sizeof(TF),cudaMemcpyDeviceToHost);
+            cudaMemcpy(&dzi_tf,gd.dzi_g.data()+k,sizeof(TF),cudaMemcpyDeviceToHost);
+            const double H=1./(double(gd.dx)*double(gd.dx))+1./(double(gd.dy)*double(gd.dy))+double(dzi_tf)*double(dzi_tf);
+            throw std::runtime_error("AMD_TIMESTEP_INVALID variable="+name+" sgs="+std::to_string(double(sgs_tf))+" molecular="+std::to_string(double(molecular))+" metric="+std::to_string(H)+" i="+std::to_string(i)+" j="+std::to_string(j)+" k="+std::to_string(k)+" rank="+std::to_string(master.get_mpiid()));
+        }
     };
     check("momentum",fields.sd.at("evisc")->fld_g,fields.visc);
     for(const auto& item:fields.sp)check(item.first,swamd_scalar?fields.sd.at(scalar_coeff.at(item.first))->fld_g.data():nullptr,item.second->visc);
