@@ -47,8 +47,77 @@ def load(path: Path) -> dict:
         out = {name: np.asarray(nc[name][:]) for name in ("time", "z", "zh") if name in nc.variables}
         for group_name, group in nc.groups.items():
             for name, var in group.variables.items():
-                out[f"{group_name}/{name}"] = np.asarray(var[:].filled(np.nan) if np.ma.isMaskedArray(var[:]) else var[:])
+                values = var[:]
+                out[f"{group_name}/{name}"] = np.asarray(
+                    values.filled(np.nan) if np.ma.isMaskedArray(values) else values
+                )
     return out
+
+
+def load_restart_series(case: Path, basename: str) -> dict:
+    """Load and join statistics written across one or more restarts.
+
+    Restarted MicroHH runs write a new NetCDF file whose suffix is the
+    restart time.  Failed attempts can overlap both the original file and a
+    later restart.  Files are applied in increasing restart-time order and
+    the newest segment wins wherever sample times overlap.
+    """
+    paths = sorted(
+        case.glob(f"{basename}.[0-9][0-9][0-9][0-9][0-9][0-9][0-9].nc"),
+        key=lambda path: int(path.stem.rsplit(".", 1)[1]),
+    )
+    if not paths:
+        raise FileNotFoundError(f"No statistics files found for {basename}")
+
+    base_paths = [path for path in paths if path.stem.endswith(".0000000")]
+    if base_paths:
+        base_mtime = base_paths[0].stat().st_mtime
+        stale_paths = [path for path in paths if path.stat().st_mtime < base_mtime]
+        if stale_paths:
+            warnings.warn(
+                "Ignoring restart statistics older than the current base file: "
+                + ", ".join(path.name for path in stale_paths)
+            )
+            paths = [path for path in paths if path not in stale_paths]
+
+    segments = [load(path) for path in paths]
+    for coordinate in ("z", "zh"):
+        reference = segments[0][coordinate]
+        if any(
+            segment[coordinate].shape != reference.shape
+            or not np.allclose(segment[coordinate], reference)
+            for segment in segments[1:]
+        ):
+            raise ValueError(f"Coordinate {coordinate} changes between {basename} restart files")
+
+    all_times = np.concatenate([segment["time"] for segment in segments])
+    # Adaptive stepping can leave nominal output times differing by roughly
+    # 1e-10 s between restart attempts.  Quantize to microseconds before
+    # identifying overlaps so 14460.0 and 14459.999999999995 are one sample.
+    time_keys = np.rint(all_times * 1.0e6).astype(np.int64)
+    # np.unique keeps its first match.  Reverse first so that duplicate times
+    # are taken from the later restart segment, then restore chronological order.
+    _, reverse_indices = np.unique(time_keys[::-1], return_index=True)
+    keep = all_times.size - 1 - reverse_indices
+    keep = keep[np.argsort(all_times[keep])]
+
+    merged = {
+        "time": all_times[keep],
+        "z": segments[-1]["z"],
+        "zh": segments[-1]["zh"],
+    }
+    keys = set.intersection(*(set(segment) for segment in segments)) - {"time", "z", "zh"}
+    for key in keys:
+        values = [segment[key] for segment in segments]
+        if all(value.ndim > 0 and value.shape[0] == segment["time"].size
+               for value, segment in zip(values, segments)):
+            merged[key] = np.concatenate(values, axis=0)[keep]
+        else:
+            merged[key] = values[-1]
+
+    source_names = ", ".join(path.name for path in paths)
+    print(f"Loaded {basename} from {source_names} ({merged['time'].size} unique samples)")
+    return merged
 
 
 def field(data: dict, group: str, name: str) -> np.ndarray:
@@ -122,13 +191,17 @@ def main() -> None:
     output = case / "outputs"
     output.mkdir(exist_ok=True)
 
-    default = load(case / "bomex-wf.default.0000000.nc")
-    cloud = load(case / "bomex-wf.ql.0000000.nc")
-    core = load(case / "bomex-wf.qlcore.0000000.nc")
+    default = load_restart_series(case, "bomex-wf.default")
+    cloud = load_restart_series(case, "bomex-wf.ql")
+    core = load_restart_series(case, "bomex-wf.qlcore")
     initial = load(case / "bomex-wf_input.nc")
     reference_path = case / "siebesma_envelopes.npz"
     if not reference_path.exists():
-        raise FileNotFoundError("Run digitize_siebesma_envelopes.py before this analysis.")
+        archived_reference = case / "old" / "spinup" / reference_path.name
+        if archived_reference.exists():
+            reference_path = archived_reference
+        else:
+            raise FileNotFoundError("Run digitize_siebesma_envelopes.py before this analysis.")
     reference = np.load(reference_path)
     z, zh = default["z"], default["zh"]
     zk, zhk = z * KM, zh * KM
@@ -152,7 +225,7 @@ def main() -> None:
     # remains valid for MicroHH versions that leave its diagnostic unfilled.
     tke_all = 0.5 * (field(default, "default", "u_2") + field(default, "default", "v_2")
                      + wh_to_z_2d(field(default, "default", "w_2")))
-    tke_column = np.trapz(tke_all, z, axis=1)
+    tke_column = np.trapezoid(tke_all, z, axis=1)
     fig, axs = plt.subplots(1, 3, figsize=(11, 3.6), sharex=True)
     digitized_time_band(axs[0], reference, "f2_cover", 100)
     digitized_time_band(axs[1], reference, "f2_lwp")
@@ -341,30 +414,35 @@ def main() -> None:
     # top-down definition of cloudy column used in the intercomparison.
     final_time = int(round(default["time"][-1]))
     path_files = sorted(case.glob(f"ql_path.xy.*.{final_time:07d}"))
+    figure_count = 12
     if not path_files:
-        raise FileNotFoundError(f"No ql_path xy cross field for t={final_time} s")
-    lwp_raw = np.fromfile(path_files[0], dtype="<f8")
-    nxy = int(np.sqrt(lwp_raw.size))
-    if nxy * nxy != lwp_raw.size:
-        raise ValueError(f"Unexpected LWP field size in {path_files[0].name}")
-    lwp = lwp_raw.reshape(nxy, nxy)
-    cloud_mask = lwp > 1.e-6
-    extent = (0, 12.8, 0, 12.8)
-    fig, axs = plt.subplots(1, 2, figsize=(11, 5), sharex=True, sharey=True)
-    mask_image = axs[0].imshow(cloud_mask, origin="lower", extent=extent, cmap="Greys", interpolation="nearest")
-    axs[0].set(title="cloud occurrence from above", xlabel="x (km)", ylabel="y (km)")
-    visible_lwp = np.ma.masked_less_equal(1e3 * lwp, 1e-3)
-    # Clear sky is the dark endpoint of Blues; cloud water brightens through
-    # the reversed map, with the largest LWP rendered white.
-    axs[1].set_facecolor(plt.get_cmap("Blues")(1.0))
-    lwp_image = axs[1].imshow(visible_lwp, origin="lower", extent=extent, cmap="Blues_r",
-                               vmin=0, vmax=np.percentile(1e3 * lwp[cloud_mask], 99.5))
-    axs[1].set(title="liquid-water path", xlabel="x (km)")
-    fig.colorbar(lwp_image, ax=axs[1], label="LWP (g m$^{-2}$)")
-    fig.suptitle(f"BOMEX Figure 13 - instantaneous cloud and LWP, t = {final_time/3600:.1f} h")
-    save(fig, output, "bomex_figure_13_final_cloud_lwp.png")
+        warnings.warn(
+            f"No ql_path xy cross field for t={final_time} s; skipping Figure 13."
+        )
+    else:
+        lwp_raw = np.fromfile(path_files[0], dtype="<f8")
+        nxy = int(np.sqrt(lwp_raw.size))
+        if nxy * nxy != lwp_raw.size:
+            raise ValueError(f"Unexpected LWP field size in {path_files[0].name}")
+        lwp = lwp_raw.reshape(nxy, nxy)
+        cloud_mask = lwp > 1.e-6
+        extent = (0, 12.8, 0, 12.8)
+        fig, axs = plt.subplots(1, 2, figsize=(11, 5), sharex=True, sharey=True)
+        axs[0].imshow(cloud_mask, origin="lower", extent=extent, cmap="Greys", interpolation="nearest")
+        axs[0].set(title="cloud occurrence from above", xlabel="x (km)", ylabel="y (km)")
+        visible_lwp = np.ma.masked_less_equal(1e3 * lwp, 1e-3)
+        # Clear sky is the dark endpoint of Blues; cloud water brightens through
+        # the reversed map, with the largest LWP rendered white.
+        axs[1].set_facecolor(plt.get_cmap("Blues")(1.0))
+        lwp_image = axs[1].imshow(visible_lwp, origin="lower", extent=extent, cmap="Blues_r",
+                                  vmin=0, vmax=np.percentile(1e3 * lwp[cloud_mask], 99.5))
+        axs[1].set(title="liquid-water path", xlabel="x (km)")
+        fig.colorbar(lwp_image, ax=axs[1], label="LWP (g m$^{-2}$)")
+        fig.suptitle(f"BOMEX Figure 13 - instantaneous cloud and LWP, t = {final_time/3600:.1f} h")
+        save(fig, output, "bomex_figure_13_final_cloud_lwp.png")
+        figure_count += 1
 
-    print(f"Wrote 13 PNGs to {output}")
+    print(f"Wrote {figure_count} PNGs to {output}")
 
 
 if __name__ == "__main__":
