@@ -299,7 +299,7 @@ void Diff_amd2<TF>::calculate_coefficients(Thermo<TF>& thermoin, const Mode mode
     const bool ustar_bot=boundary.get_momentum_bcbot()==Boundary_type::Ustar_type;
     const bool ustar_top=boundary.get_momentum_bctop()==Boundary_type::Ustar_type;
     Aggregates pass;
-    for (const auto& item : scalar_coeff) pass.scalar[item.first]=std::vector<std::uint64_t>(Scalar_status_count,0);
+    for (const auto& item : scalar_coeff) pass.scalar[item.first]=std::vector<double>(Scalar_status_count,0.);
 
     for (int k=gd.kstart; k<gd.kend; ++k)
         for (int j=gd.jstart; j<gd.jend; ++j)
@@ -443,19 +443,20 @@ void Diff_amd2<TF>::calculate_coefficients(Thermo<TF>& thermoin, const Mode mode
 template<typename TF>
 void Diff_amd2<TF>::add_aggregates(Aggregates& dst, const Aggregates& src)
 {
-    const auto checked_add=[](std::uint64_t& destination,const std::uint64_t value)
-    {
-        if (value>std::numeric_limits<std::uint64_t>::max()-destination)
-            throw std::overflow_error("AMD uint64 diagnostic counter overflow");
-        destination+=value;
-    };
-    checked_add(dst.cells_evaluated,src.cells_evaluated);
-    for (int n=0;n<Mom_status_count;++n) checked_add(dst.mom[n],src.mom[n]);
-    checked_add(dst.zero_buoyancy_gradient,src.zero_buoyancy_gradient);
+    dst.cells_evaluated+=src.cells_evaluated;
+    for (int n=0;n<Mom_status_count;++n) dst.mom[n]+=src.mom[n];
+    dst.zero_buoyancy_gradient+=src.zero_buoyancy_gradient;
     dst.max_evisc=std::max(dst.max_evisc,src.max_evisc);
     for (const auto& item:src.scalar)
-    { auto& v=dst.scalar[item.first]; if (v.empty()) v.resize(Scalar_status_count); for (int n=0;n<Scalar_status_count;++n) checked_add(v[n],item.second[n]); }
+    { auto& v=dst.scalar[item.first]; if (v.empty()) v.resize(Scalar_status_count); for (int n=0;n<Scalar_status_count;++n) v[n]+=item.second[n]; }
     for (const auto& item:src.max_scalar) dst.max_scalar[item.first]=std::max(dst.max_scalar[item.first],item.second);
+    if (!std::isfinite(dst.cells_evaluated) || !std::isfinite(dst.zero_buoyancy_gradient))
+        throw std::overflow_error("AMD floating-point diagnostic counter became non-finite");
+    for (int n=0;n<Mom_status_count;++n)
+        if (!std::isfinite(dst.mom[n])) throw std::overflow_error("AMD floating-point diagnostic counter became non-finite");
+    for (const auto& item:dst.scalar)
+        for (const double value:item.second)
+            if (!std::isfinite(value)) throw std::overflow_error("AMD floating-point diagnostic counter became non-finite");
 }
 
 template<typename TF>
@@ -482,14 +483,14 @@ void Diff_amd2<TF>::create(Stats<TF>& stats, const bool cold_start)
         "diagnostic_storage_overflow","invalid_sum","clipped","storage_overflow","positive","capped"};
     static const char* scalar_names[Scalar_status_count]={
         "zero_gradient","invalid_gradient","invalid_contraction","clipped","storage_overflow","positive","capped"};
-    stats.add_time_series_u64("amd_cells_evaluated","Domain-wide AMD operational cells evaluated","1",group);
+    stats.add_time_series("amd_cells_evaluated","Domain-wide AMD operational cells evaluated","1",group);
     for (int n=0;n<Mom_status_count;++n)
     {
         const std::string base="amd_mom_"+std::string(mom_names[n]);
-        stats.add_time_series_u64(base+"_count","Domain-wide AMD momentum "+std::string(mom_names[n])+" count","1",group);
+        stats.add_time_series(base+"_count","Domain-wide AMD momentum "+std::string(mom_names[n])+" count","1",group);
         stats.add_time_series(base+"_fraction","AMD momentum "+std::string(mom_names[n])+" fraction","1",group);
     }
-    stats.add_time_series_u64("amd_mom_zero_buoyancy_gradient_count","Domain-wide zero buoyancy-gradient count","1",group);
+    stats.add_time_series("amd_mom_zero_buoyancy_gradient_count","Domain-wide zero buoyancy-gradient count","1",group);
     stats.add_time_series("amd_mom_zero_buoyancy_gradient_fraction","Zero buoyancy-gradient fraction","1",group);
     stats.add_time_series("amd_mom_max","Maximum AMD momentum viscosity","m2 s-1",group);
     for (const auto& item:scalar_coeff)
@@ -499,7 +500,7 @@ void Diff_amd2<TF>::create(Stats<TF>& stats, const bool cold_start)
         for (int n=0;n<Scalar_status_count;++n)
         {
             const std::string status=base+"_"+scalar_names[n];
-            stats.add_time_series_u64(status+"_count","Domain-wide AMD scalar "+std::string(scalar_names[n])+" count","1",group);
+            stats.add_time_series(status+"_count","Domain-wide AMD scalar "+std::string(scalar_names[n])+" count","1",group);
             stats.add_time_series(status+"_fraction","AMD scalar "+std::string(scalar_names[n])+" fraction","1",group);
         }
         stats.add_time_series(base+"_max","Maximum AMD diffusivity for "+item.first,"m2 s-1",group);
@@ -512,6 +513,7 @@ void Diff_amd2<TF>::create(Stats<TF>& stats, const bool cold_start)
     stats.add_global_attribute("amd_contraction_precision","float64");
     stats.add_global_attribute("amd_fma_enabled","false");
     stats.add_global_attribute("amd_counts_mask_conditioned","false");
+    stats.add_global_attribute("amd_counter_storage",sizeof(TF)==sizeof(float)?"floating_point_float32":"floating_point_float64");
     stats.add_global_attribute("amd_cumulative_counter_scope","run_segment_not_restart_persistent");
     stats.add_global_attribute("amd_counter_scope","domain-wide operational RK-stage cells; repeated identically in every mask file");
     stats.add_global_attribute("amd_surface_velocity_gradient","resolved_three_point_for_ustar");
@@ -628,17 +630,17 @@ void Diff_amd2<TF>::exec_stats(Stats<TF>& stats,Thermo<TF>& th)
         static const char* scalar_names[Scalar_status_count]={
             "zero_gradient","invalid_gradient","invalid_contraction","clipped","storage_overflow","positive","capped"};
         master.sum(&pending.cells_evaluated,1);
-        stats.set_time_series_u64("amd_cells_evaluated",pending.cells_evaluated);
+        stats.set_time_series("amd_cells_evaluated",TF(pending.cells_evaluated));
         master.sum(pending.mom,Mom_status_count);
         master.sum(&pending.zero_buoyancy_gradient,1);
         for (int n=0;n<Mom_status_count;++n)
         {
             const std::string base="amd_mom_"+std::string(mom_names[n]);
-            stats.set_time_series_u64(base+"_count",pending.mom[n]);
-            stats.set_time_series(base+"_fraction",pending.cells_evaluated?TF(double(pending.mom[n])/double(pending.cells_evaluated)):TF(0));
+            stats.set_time_series(base+"_count",TF(pending.mom[n]));
+            stats.set_time_series(base+"_fraction",pending.cells_evaluated?TF(pending.mom[n]/pending.cells_evaluated):TF(0));
         }
-        stats.set_time_series_u64("amd_mom_zero_buoyancy_gradient_count",pending.zero_buoyancy_gradient);
-        stats.set_time_series("amd_mom_zero_buoyancy_gradient_fraction",pending.cells_evaluated?TF(double(pending.zero_buoyancy_gradient)/double(pending.cells_evaluated)):TF(0));
+        stats.set_time_series("amd_mom_zero_buoyancy_gradient_count",TF(pending.zero_buoyancy_gradient));
+        stats.set_time_series("amd_mom_zero_buoyancy_gradient_fraction",pending.cells_evaluated?TF(pending.zero_buoyancy_gradient/pending.cells_evaluated):TF(0));
         master.max(&pending.max_evisc,1); stats.set_time_series("amd_mom_max",TF(pending.max_evisc));
         for (auto& item:pending.scalar)
         {
@@ -646,8 +648,8 @@ void Diff_amd2<TF>::exec_stats(Stats<TF>& stats,Thermo<TF>& th)
             const std::string base="amd_"+scalar_token.at(item.first);
             for (int n=0;n<Scalar_status_count;++n)
             {
-                stats.set_time_series_u64(base+"_"+scalar_names[n]+"_count",item.second[n]);
-                stats.set_time_series(base+"_"+scalar_names[n]+"_fraction",pending.cells_evaluated?TF(double(item.second[n])/double(pending.cells_evaluated)):TF(0));
+                stats.set_time_series(base+"_"+scalar_names[n]+"_count",TF(item.second[n]));
+                stats.set_time_series(base+"_"+scalar_names[n]+"_fraction",pending.cells_evaluated?TF(item.second[n]/pending.cells_evaluated):TF(0));
             }
             double maximum=pending.max_scalar[item.first]; master.max(&maximum,1); stats.set_time_series(base+"_max",TF(maximum));
         }
@@ -658,17 +660,17 @@ void Diff_amd2<TF>::exec_stats(Stats<TF>& stats,Thermo<TF>& th)
 template<typename TF>
 void Diff_amd2<TF>::finalize_diagnostics()
 {
-    std::uint64_t evaluated=cumulative.cells_evaluated; master.sum(&evaluated,1);
-    master.print_message("AMD2 run-segment cells evaluated: "+std::to_string(evaluated));
-    std::uint64_t counts[Mom_status_count]; for (int n=0;n<Mom_status_count;++n) counts[n]=cumulative.mom[n];
+    double evaluated=cumulative.cells_evaluated; master.sum(&evaluated,1);
+    std::ostringstream evaluated_msg; evaluated_msg<<std::fixed<<std::setprecision(0)<<"AMD2 run-segment cells evaluated: "<<evaluated; master.print_message(evaluated_msg.str());
+    double counts[Mom_status_count]; for (int n=0;n<Mom_status_count;++n) counts[n]=cumulative.mom[n];
     master.sum(counts,Mom_status_count);
-    std::ostringstream msg; msg<<"AMD2 run-segment momentum counts:"; for (int n=0;n<Mom_status_count;++n) msg<<" "<<counts[n]; master.print_message(msg.str());
-    std::uint64_t zero=cumulative.zero_buoyancy_gradient;master.sum(&zero,1);
-    master.print_message("AMD2 run-segment zero-buoyancy-gradient count: "+std::to_string(zero));
+    std::ostringstream msg; msg<<std::fixed<<std::setprecision(0)<<"AMD2 run-segment momentum counts:"; for (int n=0;n<Mom_status_count;++n) msg<<" "<<counts[n]; master.print_message(msg.str());
+    double zero=cumulative.zero_buoyancy_gradient;master.sum(&zero,1);
+    std::ostringstream zero_msg; zero_msg<<std::fixed<<std::setprecision(0)<<"AMD2 run-segment zero-buoyancy-gradient count: "<<zero; master.print_message(zero_msg.str());
     for(const auto& item:cumulative.scalar)
     {
-        std::vector<std::uint64_t> scalar_counts=item.second;master.sum(scalar_counts.data(),Scalar_status_count);
-        std::ostringstream scalar_msg;scalar_msg<<"AMD2 run-segment scalar counts "<<item.first<<":";for(const auto value:scalar_counts)scalar_msg<<" "<<value;master.print_message(scalar_msg.str());
+        std::vector<double> scalar_counts=item.second;master.sum(scalar_counts.data(),Scalar_status_count);
+        std::ostringstream scalar_msg;scalar_msg<<std::fixed<<std::setprecision(0)<<"AMD2 run-segment scalar counts "<<item.first<<":";for(const auto value:scalar_counts)scalar_msg<<" "<<value;master.print_message(scalar_msg.str());
     }
 }
 

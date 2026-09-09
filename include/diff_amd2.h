@@ -7,7 +7,6 @@
 #ifndef DIFF_AMD2_H
 #define DIFF_AMD2_H
 
-#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -41,7 +40,8 @@ class Diff_amd2 : public Diff<TF>
         #ifdef USECUDA
         void prepare_device(Boundary<TF>&) override;
         void clear_device() override;
-        cuda_vector<unsigned long long> compact_counts_g;
+        cuda_vector<double> compact_counts_g;
+        cuda_vector<int> timestep_error_g;
         cuda_vector<double> compact_max_g;
         #endif
 
@@ -65,10 +65,10 @@ class Diff_amd2 : public Diff<TF>
         };
 
         struct Aggregates {
-            std::uint64_t cells_evaluated = 0;
-            std::uint64_t mom[Mom_status_count] {};
-            std::uint64_t zero_buoyancy_gradient = 0;
-            std::map<std::string, std::vector<std::uint64_t>> scalar;
+            double cells_evaluated = 0.;
+            double mom[Mom_status_count] {};
+            double zero_buoyancy_gradient = 0.;
+            std::map<std::string, std::vector<double>> scalar;
             double max_evisc = 0.;
             std::map<std::string, double> max_scalar;
         };

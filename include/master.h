@@ -27,7 +27,6 @@
 #include <mpi.h>
 #endif
 #include <string>
-#include <cstdint>
 #include "input.h"
 
 class Input;
@@ -78,7 +77,6 @@ class Master
         void sum(int*, int);
         void sum(double*, int);
         void sum(float*, int);
-        void sum(std::uint64_t*, int);
 
         // Overload the max function.
         void max(double*, int);
