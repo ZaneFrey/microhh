@@ -15,6 +15,7 @@ Run from this directory (or provide --case-dir):
 from __future__ import annotations
 
 import argparse
+import configparser
 from pathlib import Path
 import warnings
 
@@ -183,6 +184,19 @@ def safe_div(num: np.ndarray, den: np.ndarray) -> np.ndarray:
     return result
 
 
+def reliable_flux(total: np.ndarray, resolved: np.ndarray, name: str,
+                  magnitude_limit: float) -> tuple[np.ndarray, bool]:
+    """Fall back to the resolved flux when an SGS diagnostic is corrupted."""
+    valid = np.all(np.isfinite(total)) and np.nanmax(np.abs(total)) < magnitude_limit
+    if valid:
+        return total, False
+    warnings.warn(
+        f"{name}_flux contains invalid SGS diagnostic values; plotting {name}_w "
+        "(resolved turbulent flux) instead."
+    )
+    return resolved, True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-dir", type=Path, default=Path(__file__).resolve().parent)
@@ -269,14 +283,21 @@ def main() -> None:
     # The paper labels scalar fluxes in W m-2.  These envelopes are converted
     # to native cloud-statistics units using rho=1.2 kg m-3, cp=1004 J kg-1
     # K-1, and Lv=2.5e6 J kg-1; no conversion is applied to this LES output.
-    fluxes = [(1e3*d("thermo", "qt_flux"), r"$w'q_t'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_qt", 1e3/(1.2*2.5e6)),
-              (d("thermo", "thl_flux"), r"$w'\theta_l'$ (K m s$^{-1}$)", "f4_thl", 1/(1.2*1004.)),
-              (1e3*d("thermo", "ql_flux"), r"$w'q_l'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_ql", 1e3/(1.2*2.5e6)),
-              (d("thermo", "thv_flux"), r"$w'\theta_v'$ (K m s$^{-1}$)", "f4_thv", 1/(1.2*1004.)),
-              (d("default", "u_flux"), r"$u'w'$ (m$^2$ s$^{-2}$)", "f4_uw", 1)]
-    for index, (ax, (values, label, reference_name, scale)) in enumerate(zip(axs, fluxes)):
+    ql_flux, ql_resolved_only = reliable_flux(
+        d("thermo", "ql_flux"), d("thermo", "ql_w"), "ql", 1.e-2)
+    thv_flux, thv_resolved_only = reliable_flux(
+        d("thermo", "thv_flux"), d("thermo", "thv_w"), "thv", 10.)
+    fluxes = [(1e3*d("thermo", "qt_flux"), r"$w'q_t'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_qt", 1e3/(1.2*2.5e6), False),
+              (d("thermo", "thl_flux"), r"$w'\theta_l'$ (K m s$^{-1}$)", "f4_thl", 1/(1.2*1004.), False),
+              (1e3*ql_flux, r"$w'q_l'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_ql", 1e3/(1.2*2.5e6), ql_resolved_only),
+              (thv_flux, r"$w'\theta_v'$ (K m s$^{-1}$)", "f4_thv", 1/(1.2*1004.), thv_resolved_only),
+              (d("default", "u_flux"), r"$u'w'$ (m$^2$ s$^{-2}$)", "f4_uw", 1, False)]
+    for index, (ax, (values, label, reference_name, scale, resolved_only)) in enumerate(zip(axs, fluxes)):
         digitized_band(ax, reference, reference_name, scale)
         ax.plot(values, zhk, color="black"); ax.set_xlabel(label); prof_axis(ax)
+        if resolved_only:
+            ax.text(0.03, 0.97, "resolved flux only\n(invalid SGS diagnostic)",
+                    transform=ax.transAxes, va="top", fontsize=8)
         if index:
             ax.set_ylabel("")
     fig.suptitle("BOMEX Figure 4 - turbulent-flux profiles, 3-6 h")
@@ -420,13 +441,18 @@ def main() -> None:
             f"No ql_path xy cross field for t={final_time} s; skipping Figure 13."
         )
     else:
+        config = configparser.ConfigParser()
+        config.read(case / "bomex-wf.ini")
+        nx = config.getint("grid", "itot")
+        ny = config.getint("grid", "jtot")
+        xsize = config.getfloat("grid", "xsize") * KM
+        ysize = config.getfloat("grid", "ysize") * KM
         lwp_raw = np.fromfile(path_files[0], dtype="<f8")
-        nxy = int(np.sqrt(lwp_raw.size))
-        if nxy * nxy != lwp_raw.size:
+        if nx * ny != lwp_raw.size:
             raise ValueError(f"Unexpected LWP field size in {path_files[0].name}")
-        lwp = lwp_raw.reshape(nxy, nxy)
+        lwp = lwp_raw.reshape(ny, nx)
         cloud_mask = lwp > 1.e-6
-        extent = (0, 12.8, 0, 12.8)
+        extent = (0, xsize, 0, ysize)
         fig, axs = plt.subplots(1, 2, figsize=(11, 5), sharex=True, sharey=True)
         axs[0].imshow(cloud_mask, origin="lower", extent=extent, cmap="Greys", interpolation="nearest")
         axs[0].set(title="cloud occurrence from above", xlabel="x (km)", ylabel="y (km)")
