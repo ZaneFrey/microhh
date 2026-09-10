@@ -520,6 +520,8 @@ void Diff_amd2<TF>::create(Stats<TF>& stats, const bool cold_start)
     stats.add_global_attribute("amd_surface_gradient_policy","resolved ghosts; three-point stretched-grid one-sided derivative for momentum Ustar boundaries");
     stats.add_global_attribute("amd_unsupported_features","fourth-order grids, active immersed boundaries, wall damping");
     stats.add_global_attribute("amd_budget_semantics","Budget_2 historical Smagorinsky LES helper; *_diff omits parts of the molecular/anelastic operator and is not an exact total-diffusion closure");
+    stats.add_global_attribute("amd_derived_moist_diffusivity","none; ql and thv are diagnosed from prognostic thl and qt");
+    stats.add_global_attribute("amd_derived_moist_flux_method","fixed-pressure phase-adjustment Jacobian applied to total thl and qt diffusive fluxes");
     stats.add_global_attribute("amd_spatial_order",2.);
     stats.add_global_attribute("amd_immersed_boundary_supported","false");
     stats.add_global_attribute("amd_cx",camd[0]); stats.add_global_attribute("amd_cy",camd[1]); stats.add_global_attribute("amd_cz",camd[2]);
@@ -565,13 +567,22 @@ template<typename TF>
 void Diff_amd2<TF>::diff_flux(Field3d<TF>& out, const Field3d<TF>& in)
 {
     auto& gd=grid.get_grid_data();
+    const auto momentum_it=fields.mp.find(in.name);
+    const bool is_momentum=momentum_it!=fields.mp.end() && momentum_it->second.get()==&in;
+    const auto scalar_it=fields.sp.find(in.name);
+    const bool is_prognostic_scalar=scalar_it!=fields.sp.end() && scalar_it->second.get()==&in;
+    if (!is_momentum && !is_prognostic_scalar)
+        throw std::runtime_error(
+                "AMD diffusive flux requires an actual registered momentum or prognostic scalar field; '"
+                +in.name+"' is diagnostic or unregistered");
+
     auto wrapper=[&]<Surface_model sm>()
     {
-        if (in.loc[0]==1) dk::calc_diff_flux_u<TF,sm>(out.fld.data(),in.fld.data(),fields.mp.at("w")->fld.data(),fields.sd.at("evisc")->fld.data(),gd.dxi,gd.dzhi.data(),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
-        else if (in.loc[1]==1) dk::calc_diff_flux_v<TF,sm>(out.fld.data(),in.fld.data(),fields.mp.at("w")->fld.data(),fields.sd.at("evisc")->fld.data(),gd.dyi,gd.dzhi.data(),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
-        else if (fields.mp.count(in.name)) dk::calc_diff_flux_c<TF,sm>(out.fld.data(),in.fld.data(),fields.sd.at("evisc")->fld.data(),gd.dzhi.data(),TF(1),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
-        else if (swamd_scalar && scalar_coeff.count(in.name)) dk::calc_diff_flux_c<TF,sm>(out.fld.data(),in.fld.data(),fields.sd.at(scalar_coeff.at(in.name))->fld.data(),gd.dzhi.data(),TF(1),in.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
-        else flux_c_molecular_les<TF,sm>(out.fld.data(),in.fld.data(),gd.dzhi.data(),in.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
+        if (is_momentum && in.loc[0]==1) dk::calc_diff_flux_u<TF,sm>(out.fld.data(),in.fld.data(),fields.mp.at("w")->fld.data(),fields.sd.at("evisc")->fld.data(),gd.dxi,gd.dzhi.data(),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
+        else if (is_momentum && in.loc[1]==1) dk::calc_diff_flux_v<TF,sm>(out.fld.data(),in.fld.data(),fields.mp.at("w")->fld.data(),fields.sd.at("evisc")->fld.data(),gd.dyi,gd.dzhi.data(),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
+        else if (is_momentum) dk::calc_diff_flux_c<TF,sm>(out.fld.data(),in.fld.data(),fields.sd.at("evisc")->fld.data(),gd.dzhi.data(),TF(1),fields.visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
+        else if (swamd_scalar) dk::calc_diff_flux_c<TF,sm>(out.fld.data(),in.fld.data(),fields.sd.at(scalar_coeff.at(in.name))->fld.data(),gd.dzhi.data(),TF(1),scalar_it->second->visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
+        else flux_c_molecular_les<TF,sm>(out.fld.data(),in.fld.data(),gd.dzhi.data(),scalar_it->second->visc,gd.istart,gd.iend,gd.jstart,gd.jend,gd.kstart,gd.kend,gd.icells,gd.ijcells);
     };
     const bool surface=boundary.get_switch()!="default";
     if (surface)

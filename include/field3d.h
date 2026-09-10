@@ -62,7 +62,11 @@ class Field3d
 
         std::array<int,3> loc;
 
-        TF visc;
+        // Temporary fields do not carry a physical molecular diffusivity.
+        // Initialize the metadata defensively so accidental reads cannot invoke
+        // undefined behaviour; diffusion schemes must still explicitly decide
+        // whether a field is eligible for diffusion.
+        TF visc = TF(0);
 
         // Device functions and variables
         void init_device();  // Allocate Field3D fields at device

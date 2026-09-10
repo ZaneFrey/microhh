@@ -33,6 +33,10 @@
 
 #include <iostream>
 #include <iomanip>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <stdexcept>
 
 #include "constants.h"
 #include "fast_math.h"
@@ -292,6 +296,145 @@ namespace Thermo_moist_functions
         }
 
         return ans;
+    }
+
+    /** Fixed-pressure derivatives of diagnosed condensate and virtual potential
+     * temperature with respect to the prognostic variables thl and qt.
+     *
+     * These derivatives are intended for transforming fluxes of the prognostic
+     * variables. They are not diffusivities for the diagnosed variables.
+     */
+    struct Struct_moist_jacobian
+    {
+        double dql_dthl;
+        double dql_dqt;
+        double dqi_dthl;
+        double dqi_dqt;
+        double dthv_dthl;
+        double dthv_dqt;
+    };
+
+    struct Struct_moist_derived_flux
+    {
+        double ql;
+        double thv;
+    };
+
+    template<typename TF>
+    inline Struct_moist_jacobian moist_thermodynamic_jacobian(
+            const TF thl_in, const TF qt_in, const TF p_in, const TF exn_in)
+    {
+        const double thl = double(thl_in);
+        const double qt = double(qt_in);
+        const double p = double(p_in);
+        const double exn = double(exn_in);
+        if (!std::isfinite(thl) || !std::isfinite(qt)
+                || !std::isfinite(p) || !std::isfinite(exn) || !(p > 0.) || !(exn > 0.))
+            throw std::runtime_error("Invalid state for moist thermodynamic flux Jacobian");
+
+        const Struct_sat_adjust<TF> ssa = sat_adjust(thl_in, qt_in, p_in, exn_in);
+        const double ql = double(ssa.ql);
+        const double qi = double(ssa.qi);
+        const double temperature = double(ssa.t);
+        if (!std::isfinite(ql) || !std::isfinite(qi) || !std::isfinite(temperature))
+            throw std::runtime_error("Non-finite saturation-adjustment state for moist thermodynamic flux Jacobian");
+
+        double dql_dthl = 0.;
+        double dql_dqt = 0.;
+        double dqi_dthl = 0.;
+        double dqi_dqt = 0.;
+
+        // sat_adjust() returns before its nonlinear solve at and below the
+        // saturation threshold. Match that branch exactly.
+        if (ql + qi > 0.)
+        {
+            const bool warm = thl*exn >= double(T0<TF>);
+            double alpha = 1.;
+            double dalpha_dT = 0.;
+            double latent = double(Lv<TF>);
+            double dlatent_dT = 0.;
+            double qs = double(qsat_liq(TF(p), TF(temperature)));
+            double dqs_dT = double(dqsatdT_liq(TF(p), TF(temperature)));
+
+            if (!warm)
+            {
+                alpha = double(water_fraction(TF(temperature)));
+                dalpha_dT = (alpha > 0. && alpha < 1.) ? 0.025 : 0.;
+                latent = alpha*double(Lv<TF>) + (1.-alpha)*double(Ls<TF>);
+                dlatent_dT = dalpha_dT*(double(Lv<TF>)-double(Ls<TF>));
+
+                const double qs_liq = double(qsat_liq(TF(p), TF(temperature)));
+                const double qs_ice = double(qsat_ice(TF(p), TF(temperature)));
+                const double dqs_liq_dT = double(dqsatdT_liq(TF(p), TF(temperature)));
+                const double dqs_ice_dT = double(dqsatdT_ice(TF(p), TF(temperature)));
+                qs = alpha*qs_liq + (1.-alpha)*qs_ice;
+                // Include the derivative of the phase weighting. The legacy
+                // dqsatdT() helper deliberately remains unchanged because it
+                // is also used by the existing saturation-adjustment solver.
+                dqs_dT = dalpha_dT*(qs_liq-qs_ice)
+                         + alpha*dqs_liq_dT + (1.-alpha)*dqs_ice_dT;
+            }
+
+            const double condensate = qt-qs;
+            const double inv_cp = 1./double(cp<TF>);
+            const double term_latent = dlatent_dT*condensate*inv_cp;
+            const double term_qsat = latent*dqs_dT*inv_cp;
+            const double denominator = 1.-term_latent+term_qsat;
+            const double scale = std::max({1., std::abs(term_latent), std::abs(term_qsat)});
+            if (!std::isfinite(denominator)
+                    || std::abs(denominator) <= 64.*std::numeric_limits<double>::epsilon()*scale)
+                throw std::runtime_error("Singular moist thermodynamic flux Jacobian");
+
+            const double dT_dthl = exn/denominator;
+            const double dT_dqt = latent*inv_cp/denominator;
+            const double dcond_dthl = -dqs_dT*dT_dthl;
+            const double dcond_dqt = 1.-dqs_dT*dT_dqt;
+
+            dql_dthl = alpha*dcond_dthl + dalpha_dT*dT_dthl*condensate;
+            dql_dqt = alpha*dcond_dqt + dalpha_dT*dT_dqt*condensate;
+            dqi_dthl = (1.-alpha)*dcond_dthl - dalpha_dT*dT_dthl*condensate;
+            dqi_dqt = (1.-alpha)*dcond_dqt - dalpha_dT*dT_dqt*condensate;
+        }
+
+        const double inv_cp_exn = 1./(double(cp<TF>)*exn);
+        const double theta = thl + (double(Lv<TF>)*ql + double(Ls<TF>)*qi)*inv_cp_exn;
+        const double rv_rd = double(Rv<TF>)/double(Rd<TF>);
+        const double epsilon = rv_rd-1.;
+        const double condensate = ql+qi;
+        const double virtual_factor = 1.+epsilon*qt-rv_rd*condensate;
+
+        const double dtheta_dthl = 1. + (double(Lv<TF>)*dql_dthl + double(Ls<TF>)*dqi_dthl)*inv_cp_exn;
+        const double dtheta_dqt = (double(Lv<TF>)*dql_dqt + double(Ls<TF>)*dqi_dqt)*inv_cp_exn;
+        const double dfactor_dthl = -rv_rd*(dql_dthl+dqi_dthl);
+        const double dfactor_dqt = epsilon-rv_rd*(dql_dqt+dqi_dqt);
+        const double dthv_dthl = dtheta_dthl*virtual_factor + theta*dfactor_dthl;
+        const double dthv_dqt = dtheta_dqt*virtual_factor + theta*dfactor_dqt;
+
+        const Struct_moist_jacobian result = {
+            dql_dthl, dql_dqt, dqi_dthl, dqi_dqt, dthv_dthl, dthv_dqt};
+        const double values[] = {
+            result.dql_dthl, result.dql_dqt, result.dqi_dthl,
+            result.dqi_dqt, result.dthv_dthl, result.dthv_dqt};
+        for (const double value : values)
+            if (!std::isfinite(value))
+                throw std::runtime_error("Non-finite moist thermodynamic flux Jacobian");
+        return result;
+    }
+
+    template<typename TF>
+    inline Struct_moist_derived_flux transform_moist_diffusive_flux(
+            const TF thl, const TF qt, const TF p, const TF exn,
+            const TF thl_flux, const TF qt_flux)
+    {
+        if (!std::isfinite(double(thl_flux)) || !std::isfinite(double(qt_flux)))
+            throw std::runtime_error("Non-finite prognostic flux for moist thermodynamic flux transformation");
+        const Struct_moist_jacobian jac = moist_thermodynamic_jacobian(thl, qt, p, exn);
+        const Struct_moist_derived_flux result = {
+            jac.dql_dthl*double(thl_flux) + jac.dql_dqt*double(qt_flux),
+            jac.dthv_dthl*double(thl_flux) + jac.dthv_dqt*double(qt_flux)};
+        if (!std::isfinite(result.ql) || !std::isfinite(result.thv))
+            throw std::runtime_error("Non-finite diagnosed moist diffusive flux");
+        return result;
     }
 
     template<typename TF>

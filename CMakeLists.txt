@@ -79,6 +79,8 @@ else()
   project(microhhc CXX Fortran)
 endif()
 
+include(CTest)
+
 # Display status messages for MPI set precompiler flags.
 if(USEMPI)
   message(STATUS "MPI: Enabled.")
@@ -183,3 +185,6 @@ endif()
 
 add_subdirectory(src)
 add_subdirectory(main)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()

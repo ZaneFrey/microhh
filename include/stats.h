@@ -39,6 +39,7 @@ template<typename> class Diff;
 template<typename> class Timeloop;
 template<typename> class Netcdf_variable;
 template<typename> class Field3d;
+enum class Diffusion_type;
 
 // Struct for profiles
 enum class Level_type {Full, Half};
@@ -148,6 +149,10 @@ class Stats
         void add_global_attribute(const std::string&, const std::string&);
         void add_global_attribute(const std::string&, const double);
 
+        bool is_profile_enabled(const std::string&) const;
+        Diffusion_type get_diffusion_type() const;
+        void get_diffusive_flux(Field3d<TF>&, const Field3d<TF>&);
+
         void calc_mask_stats(
                 std::pair<const std::string, Mask<TF>>&,
                 const std::string&, const Field3d<TF>&, const TF, const TF);
@@ -158,10 +163,15 @@ class Stats
                 const Field3d<TF>&);
 
         void calc_stats(const std::string&, const Field3d<TF>&, const TF, const TF);
+        void calc_stats_with_diff_flux(
+                const std::string&, const Field3d<TF>&, const TF, const TF,
+                const Field3d<TF>&);
         void calc_stats_mean(const std::string&, const Field3d<TF>&, const TF);
         void calc_stats_moments(const std::string&, const Field3d<TF>&, const TF);
         void calc_stats_w(const std::string&, const Field3d<TF>&, const TF);
         void calc_stats_diff(const std::string&, const Field3d<TF>&, const TF);
+        void calc_stats_diff(
+                const std::string&, const Field3d<TF>&, const Field3d<TF>&);
         void calc_stats_flux(const std::string&, const Field3d<TF>&, const TF);
         void calc_stats_grad(const std::string&, const Field3d<TF>&);
         void calc_stats_path(const std::string&, const Field3d<TF>&);

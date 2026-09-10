@@ -678,11 +678,13 @@ void Model<TF>::calculate_statistics(int iteration, double time, unsigned long i
             calc_masks();
 
         grid       ->exec_stats(*stats);
+        // Refresh diagnostic diffusion coefficients before any field or
+        // thermodynamic diffusive-flux profiles consume them.
+        diff       ->exec_stats(*stats, *thermo);
         fields     ->exec_stats(*stats);
         thermo     ->exec_stats(*stats);
         background ->exec_stats(*stats);
         microphys  ->exec_stats(*stats, *thermo, dt);
-        diff       ->exec_stats(*stats, *thermo);
         budget     ->exec_stats(*stats);
         boundary   ->exec_stats(*stats);
     }

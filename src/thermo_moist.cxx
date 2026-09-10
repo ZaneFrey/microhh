@@ -717,6 +717,89 @@ namespace
     }
 
     template<typename TF>
+    void calc_moist_derived_diffusive_fluxes(
+            TF* const restrict ql_flux, TF* const restrict thv_flux,
+            const TF* const restrict thl, const TF* const restrict qt,
+            const TF* const restrict thl_flux, const TF* const restrict qt_flux,
+            const TF* const restrict prefh,
+            const TF* const restrict z, const TF* const restrict zh,
+            const int istart, const int iend,
+            const int jstart, const int jend,
+            const int kstart, const int kend,
+            const int icells, const int ijcells)
+    {
+        bool failed = false;
+        int failed_i = -1;
+        int failed_j = -1;
+        int failed_k = -1;
+        std::string failure_message;
+
+        #pragma omp parallel for
+        for (int k=kstart; k<=kend; ++k)
+            for (int j=jstart; j<jend; ++j)
+                for (int i=istart; i<iend; ++i)
+                {
+                    const int ijk = i + j*icells + k*ijcells;
+                    TF thl_face;
+                    TF qt_face;
+                    if (k == kstart)
+                    {
+                        const int ijkc = i + j*icells + kstart*ijcells;
+                        thl_face = thl[ijkc];
+                        qt_face = qt[ijkc];
+                    }
+                    else if (k == kend)
+                    {
+                        const int ijkc = i + j*icells + (kend-1)*ijcells;
+                        thl_face = thl[ijkc];
+                        qt_face = qt[ijkc];
+                    }
+                    else
+                    {
+                        const double f = (double(zh[k])-double(z[k-1]))
+                                       / (double(z[k])-double(z[k-1]));
+                        thl_face = TF((1.-f)*double(thl[ijk-ijcells]) + f*double(thl[ijk]));
+                        qt_face = TF((1.-f)*double(qt[ijk-ijcells]) + f*double(qt[ijk]));
+                    }
+
+                    try
+                    {
+                        const TF exn_face = exner(prefh[k]);
+                        const auto flux = transform_moist_diffusive_flux(
+                                thl_face, qt_face, prefh[k], exn_face,
+                                thl_flux[ijk], qt_flux[ijk]);
+                        const double limit = double(std::numeric_limits<TF>::max());
+                        if (std::abs(flux.ql) > limit || std::abs(flux.thv) > limit)
+                            throw std::runtime_error("Diagnosed moist diffusive flux is not representable in model precision");
+                        ql_flux[ijk] = TF(flux.ql);
+                        thv_flux[ijk] = TF(flux.thv);
+                    }
+                    catch (const std::exception& error)
+                    {
+                        ql_flux[ijk] = TF(0);
+                        thv_flux[ijk] = TF(0);
+                        #pragma omp critical
+                        if (!failed)
+                        {
+                            failed = true;
+                            failed_i = i;
+                            failed_j = j;
+                            failed_k = k;
+                            failure_message = error.what();
+                        }
+                    }
+                }
+
+        if (failed)
+        {
+            std::ostringstream message;
+            message << "AMD moist derived-flux diagnostic failed: " << failure_message
+                    << " i=" << failed_i << " j=" << failed_j << " k=" << failed_k;
+            throw std::runtime_error(message.str());
+        }
+    }
+
+    template<typename TF>
     void calc_buoyancy_tend_4th(TF* restrict wt, TF* restrict thl,  TF* restrict qt,
                                 TF* restrict ph, TF* restrict thlh, TF* restrict qth,
                                 TF* restrict ql, TF* restrict thvrefh,
@@ -2101,13 +2184,49 @@ void Thermo_moist<TF>::exec_stats(Stats<TF>& stats)
     const TF no_offset = 0.;
     const TF no_threshold = 0.;
 
+    // AMD assigns diffusivities to prognostic scalars, not to nonlinear
+    // thermodynamic diagnostics. Construct ql and thv diffusive fluxes from
+    // the independently modeled thl and qt fluxes through the local
+    // fixed-pressure saturation-adjustment Jacobian.
+    const bool use_amd_derived_flux =
+            stats.get_diffusion_type() == Diffusion_type::Diff_amd2
+            && (stats.is_profile_enabled("ql_diff")
+                || stats.is_profile_enabled("thv_diff"));
+    std::shared_ptr<Field3d<TF>> thl_diff_flux;
+    std::shared_ptr<Field3d<TF>> qt_diff_flux;
+    std::shared_ptr<Field3d<TF>> ql_diff_flux;
+    std::shared_ptr<Field3d<TF>> thv_diff_flux;
+    if (use_amd_derived_flux)
+    {
+        thl_diff_flux = fields.get_tmp();
+        qt_diff_flux = fields.get_tmp();
+        ql_diff_flux = fields.get_tmp();
+        thv_diff_flux = fields.get_tmp();
+        ql_diff_flux->loc = gd.wloc;
+        thv_diff_flux->loc = gd.wloc;
+
+        stats.get_diffusive_flux(*thl_diff_flux, *fields.sp.at("thl"));
+        stats.get_diffusive_flux(*qt_diff_flux, *fields.sp.at("qt"));
+        calc_moist_derived_diffusive_fluxes(
+                ql_diff_flux->fld.data(), thv_diff_flux->fld.data(),
+                fields.sp.at("thl")->fld.data(), fields.sp.at("qt")->fld.data(),
+                thl_diff_flux->fld.data(), qt_diff_flux->fld.data(),
+                bs_stats.prefh.data(), gd.z.data(), gd.zh.data(),
+                gd.istart, gd.iend, gd.jstart, gd.jend,
+                gd.kstart, gd.kend, gd.icells, gd.ijcells);
+    }
+
     // Calculate the virtual temperature stats.
     auto thv = fields.get_tmp();
     thv->loc = gd.sloc;
     get_thermo_field(*thv, "thv", true, true);
     get_thermo_field(*thv, "thv_fluxbot", true, true);
 
-    stats.calc_stats("thv", *thv, no_offset, no_threshold);
+    if (use_amd_derived_flux)
+        stats.calc_stats_with_diff_flux(
+                "thv", *thv, no_offset, no_threshold, *thv_diff_flux);
+    else
+        stats.calc_stats("thv", *thv, no_offset, no_threshold);
 
     fields.release_tmp(thv);
 
@@ -2134,7 +2253,11 @@ void Thermo_moist<TF>::exec_stats(Stats<TF>& stats)
     }
 
     get_thermo_field(*ql, "ql", true, true);
-    stats.calc_stats("ql", *ql, no_offset, no_threshold);
+    if (use_amd_derived_flux)
+        stats.calc_stats_with_diff_flux(
+                "ql", *ql, no_offset, no_threshold, *ql_diff_flux);
+    else
+        stats.calc_stats("ql", *ql, no_offset, no_threshold);
 
     // set all values to zero
     for (int n=0; n<gd.ncells; ++n)
@@ -2161,6 +2284,14 @@ void Thermo_moist<TF>::exec_stats(Stats<TF>& stats)
     stats.calc_stats_flux("ql", *ql, no_offset);
 
     fields.release_tmp(ql);
+
+    if (use_amd_derived_flux)
+    {
+        fields.release_tmp(thl_diff_flux);
+        fields.release_tmp(qt_diff_flux);
+        fields.release_tmp(ql_diff_flux);
+        fields.release_tmp(thv_diff_flux);
+    }
 
     // Calculate the ice stats
     auto qi = fields.get_tmp();

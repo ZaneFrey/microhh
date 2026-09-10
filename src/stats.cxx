@@ -1480,6 +1480,40 @@ void Stats<TF>::calc_stats(
     calc_stats_frac(varname, fld, offset, threshold);        
 }
 
+template<typename TF>
+void Stats<TF>::calc_stats_with_diff_flux(
+        const std::string& varname, const Field3d<TF>& fld,
+        const TF offset, const TF threshold, const Field3d<TF>& diff_flux)
+{
+    calc_stats_mean(varname, fld, offset);
+    calc_stats_moments(varname, fld, offset);
+    calc_stats_w(varname, fld, offset);
+    calc_stats_diff(varname, fld, diff_flux);
+    calc_stats_flux(varname, fld, offset);
+    calc_stats_grad(varname, fld);
+    calc_stats_path(varname, fld);
+    calc_stats_cover(varname, fld, offset, threshold);
+    calc_stats_frac(varname, fld, offset, threshold);
+}
+
+template<typename TF>
+bool Stats<TF>::is_profile_enabled(const std::string& name) const
+{
+    return std::find(varlist.begin(), varlist.end(), name) != varlist.end();
+}
+
+template<typename TF>
+Diffusion_type Stats<TF>::get_diffusion_type() const
+{
+    return diff.get_switch();
+}
+
+template<typename TF>
+void Stats<TF>::get_diffusive_flux(Field3d<TF>& out, const Field3d<TF>& in)
+{
+    diff.diff_flux(out, in);
+}
+
 
 template<typename TF>
 void Stats<TF>::calc_stats_mean(
@@ -1598,18 +1632,30 @@ template<typename TF>
 void Stats<TF>::calc_stats_diff(
         const std::string& varname, const Field3d<TF>& fld, const TF offset)
 {
-    auto& gd = grid.get_grid_data();
-
-    unsigned int flag;
-    const int* nmask;
-    std::string name;
-
     // Calc Diffusive Flux
-    name = varname + "_diff";
-    if (std::find(varlist.begin(), varlist.end(), name) != varlist.end())
+    const std::string name = varname + "_diff";
+    if (is_profile_enabled(name))
     {
         auto diff_flux = fields.get_tmp();
         diff.diff_flux(*diff_flux, fld);
+
+        calc_stats_diff(varname, fld, *diff_flux);
+
+        fields.release_tmp(diff_flux);
+    }
+}
+
+template<typename TF>
+void Stats<TF>::calc_stats_diff(
+        const std::string& varname, const Field3d<TF>& fld,
+        const Field3d<TF>& diff_flux)
+{
+    auto& gd = grid.get_grid_data();
+    const std::string name = varname + "_diff";
+    if (is_profile_enabled(name))
+    {
+        unsigned int flag;
+        const int* nmask;
 
         for (auto& m : masks)
         {
@@ -1617,7 +1663,7 @@ void Stats<TF>::calc_stats_diff(
 
             calc_mean(
                     m.second.profs.at(name).data.data(),
-                    diff_flux->fld.data(),
+                    diff_flux.fld.data(),
                     mfield.data(), flag, nmask,
                     gd.istart, gd.iend,
                     gd.jstart, gd.jend,
@@ -1627,8 +1673,6 @@ void Stats<TF>::calc_stats_diff(
             master.sum(m.second.profs.at(name).data.data(), gd.kcells);
             set_fillvalue_prof(m.second.profs.at(name).data.data(), nmask, gd.kstart, gd.kcells);
         }
-
-        fields.release_tmp(diff_flux);
     }
 }
 
