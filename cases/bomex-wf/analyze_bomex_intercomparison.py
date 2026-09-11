@@ -31,7 +31,9 @@ AVG_START = 3 * 3600.0
 AVG_END = 6 * 3600.0
 KM = 1.0e-3
 G = 9.81
-REF_Z = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
+RHO_REF = 1.2
+CP = 1004.0
+LV = 2.5e6
 
 
 def style() -> None:
@@ -147,31 +149,6 @@ def save(fig: plt.Figure, output: Path, name: str) -> None:
     plt.close(fig)
 
 
-def ref_band(ax: plt.Axes, lo: np.ndarray, hi: np.ndarray, z: np.ndarray = REF_Z,
-             label: str | None = None) -> None:
-    """Plot a digitized Siebesma et al. ensemble envelope behind LES data.
-
-    Values are graphical read-offs of the paper's gray, +/-2-standard-
-    deviation bands at the tabulated heights; interpolation gives a smooth
-    envelope.  They are deliberately kept separate from this run's sampling
-    uncertainty.
-    """
-    ax.fill_betweenx(z, lo, hi, color="0.5", alpha=0.50, lw=0, zorder=0,
-                     label=label)
-
-
-def digitized_band(ax: plt.Axes, reference: np.lib.npyio.NpzFile, name: str, scale: float = 1.0) -> None:
-    """Draw the pixel-level envelope digitized from a supplied paper crop."""
-    z = reference[f"{name}_z"] * KM
-    ax.fill_betweenx(z, reference[f"{name}_lo"] * scale, reference[f"{name}_hi"] * scale,
-                     color="0.5", alpha=0.50, lw=0, zorder=0)
-
-
-def digitized_time_band(ax: plt.Axes, reference: np.lib.npyio.NpzFile, name: str, scale: float = 1.0) -> None:
-    ax.fill_between(reference[f"{name}_x"] / 60., reference[f"{name}_lo"] * scale,
-                    reference[f"{name}_hi"] * scale, color="0.5", alpha=0.50, lw=0, zorder=0)
-
-
 def prof_axis(ax: plt.Axes) -> None:
     ax.set_ylim(0, 3.5)
     ax.set_ylabel("height (km)")
@@ -209,14 +186,6 @@ def main() -> None:
     cloud = load_restart_series(case, "bomex-wf.ql")
     core = load_restart_series(case, "bomex-wf.qlcore")
     initial = load(case / "bomex-wf_input.nc")
-    reference_path = case / "siebesma_envelopes.npz"
-    if not reference_path.exists():
-        archived_reference = case / "old" / "spinup" / reference_path.name
-        if archived_reference.exists():
-            reference_path = archived_reference
-        else:
-            raise FileNotFoundError("Run digitize_siebesma_envelopes.py before this analysis.")
-    reference = np.load(reference_path)
     z, zh = default["z"], default["zh"]
     zk, zhk = z * KM, zh * KM
     wh_to_z_2d = lambda values: 0.5 * (values[:, :-1] + values[:, 1:])
@@ -241,9 +210,8 @@ def main() -> None:
                      + wh_to_z_2d(field(default, "default", "w_2")))
     tke_column = np.trapezoid(tke_all, z, axis=1)
     fig, axs = plt.subplots(1, 3, figsize=(11, 3.6), sharex=True)
-    digitized_time_band(axs[0], reference, "f2_cover", 100)
-    digitized_time_band(axs[1], reference, "f2_lwp")
-    digitized_time_band(axs[2], reference, "f2_tke")
+    # ql_cover is the fraction of horizontal columns containing ql > 0 at
+    # any height, matching the total-cloud-cover definition in Figure 2.
     axs[0].plot(time_h, 100 * field(default, "thermo", "ql_cover"), color="black"); axs[0].set(ylabel="cloud cover (%)")
     axs[1].plot(time_h, 1e3 * field(default, "thermo", "ql_path"), color="black"); axs[1].set(ylabel="LWP (g m$^{-2}$)")
     axs[2].plot(time_h, tke_column, color="black"); axs[2].set(ylabel=r"$\int$ TKE dz (m$^3$ s$^{-2}$)")
@@ -264,14 +232,12 @@ def main() -> None:
 
     # Figure 3 -- mean profiles.
     fig, axs = plt.subplots(1, 5, figsize=(14, 4.5), sharey=True)
-    panels = [(thl, field(initial, "init", "thl"), r"$\theta_l$ (K)", "f3_thl"),
-              (1e3 * qt, 1e3 * field(initial, "init", "qt"), r"$q_t$ (g kg$^{-1}$)", "f3_qt"),
-              (u, field(initial, "init", "u"), "u (m s$^{-1}$)", "f3_u"),
-              (v, field(initial, "init", "v"), "v (m s$^{-1}$)", None),
-              (1e3 * ql, np.zeros_like(z), r"$q_l$ (g kg$^{-1}$)", "f3_ql")]
-    for ax, (values, initial_values, label, reference_name) in zip(axs, panels):
-        if reference_name:
-            digitized_band(ax, reference, reference_name)
+    panels = [(thl, field(initial, "init", "thl"), r"$\theta_l$ (K)"),
+              (1e3 * qt, 1e3 * field(initial, "init", "qt"), r"$q_t$ (g kg$^{-1}$)"),
+              (u, field(initial, "init", "u"), "u (m s$^{-1}$)"),
+              (v, field(initial, "init", "v"), "v (m s$^{-1}$)"),
+              (1e3 * ql, np.zeros_like(z), r"$q_l$ (g kg$^{-1}$)")]
+    for ax, (values, initial_values, label) in zip(axs, panels):
         ax.plot(values, zk, color="black")
         ax.plot(initial_values, zk, color="black", ls="--", lw=1.4)
         ax.set_xlabel(label); prof_axis(ax)
@@ -280,20 +246,18 @@ def main() -> None:
 
     # Figure 4 -- total turbulent fluxes.
     fig, axs = plt.subplots(1, 5, figsize=(14, 4.5), sharey=True)
-    # The paper labels scalar fluxes in W m-2.  These envelopes are converted
-    # to native cloud-statistics units using rho=1.2 kg m-3, cp=1004 J kg-1
-    # K-1, and Lv=2.5e6 J kg-1; no conversion is applied to this LES output.
+    # Match the energetic scalar-flux units in Siebesma et al. (2003):
+    # moisture fluxes use rho*Lv and temperature fluxes use rho*cp.
     ql_flux, ql_resolved_only = reliable_flux(
         d("thermo", "ql_flux"), d("thermo", "ql_w"), "ql", 1.e-2)
     thv_flux, thv_resolved_only = reliable_flux(
         d("thermo", "thv_flux"), d("thermo", "thv_w"), "thv", 10.)
-    fluxes = [(1e3*d("thermo", "qt_flux"), r"$w'q_t'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_qt", 1e3/(1.2*2.5e6), False),
-              (d("thermo", "thl_flux"), r"$w'\theta_l'$ (K m s$^{-1}$)", "f4_thl", 1/(1.2*1004.), False),
-              (1e3*ql_flux, r"$w'q_l'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_ql", 1e3/(1.2*2.5e6), ql_resolved_only),
-              (thv_flux, r"$w'\theta_v'$ (K m s$^{-1}$)", "f4_thv", 1/(1.2*1004.), thv_resolved_only),
-              (d("default", "u_flux"), r"$u'w'$ (m$^2$ s$^{-2}$)", "f4_uw", 1, False)]
-    for index, (ax, (values, label, reference_name, scale, resolved_only)) in enumerate(zip(axs, fluxes)):
-        digitized_band(ax, reference, reference_name, scale)
+    fluxes = [(RHO_REF * LV * d("thermo", "qt_flux"), r"$\rho L_v\,\overline{w'q_t'}$ (W m$^{-2}$)", False),
+              (RHO_REF * CP * d("thermo", "thl_flux"), r"$\rho c_p\,\overline{w'\theta_l'}$ (W m$^{-2}$)", False),
+              (RHO_REF * LV * ql_flux, r"$\rho L_v\,\overline{w'q_l'}$ (W m$^{-2}$)", ql_resolved_only),
+              (RHO_REF * CP * thv_flux, r"$\rho c_p\,\overline{w'\theta_v'}$ (W m$^{-2}$)", thv_resolved_only),
+              (d("default", "u_flux"), r"$\overline{u'w'}$ (m$^2$ s$^{-2}$)", False)]
+    for index, (ax, (values, label, resolved_only)) in enumerate(zip(axs, fluxes)):
         ax.plot(values, zhk, color="black"); ax.set_xlabel(label); prof_axis(ax)
         if resolved_only:
             ax.text(0.03, 0.97, "resolved flux only\n(invalid SGS diagnostic)",
@@ -306,8 +270,6 @@ def main() -> None:
     # Figure 5 -- turbulent kinetic energy and vertical velocity variance.
     fig, axs = plt.subplots(1, 2, figsize=(7.4, 4.5), sharey=True)
     use = (default["time"] >= AVG_START) & (default["time"] <= AVG_END)
-    digitized_band(axs[0], reference, "f5_tke")
-    digitized_band(axs[1], reference, "f5_w2")
     axs[0].plot(np.nanmean(tke_all[use], axis=0), zk, color="black"); axs[0].set(xlabel="TKE (m$^2$ s$^{-2}$)")
     axs[1].plot(d("default", "w_2"), zhk, color="black"); axs[1].set(xlabel=r"$w'^2$ (m$^2$ s$^{-2}$)")
     for ax in axs: prof_axis(ax)
@@ -317,7 +279,6 @@ def main() -> None:
     # Figure 6 -- cloud and positively buoyant cloud-core cover.
     cloud_area, core_area = c("default", "area"), co("default", "area")
     fig, ax = plt.subplots(figsize=(5, 4.5))
-    digitized_band(ax, reference, "f6_cover", 100)
     ax.plot(100 * cloud_area, zk, label="cloud (ql > 0)")
     ax.plot(100 * core_area, zk, label="cloud core (ql > 0, b' > 0)")
     ax.set(xlabel="fractional area (%)"); prof_axis(ax); ax.legend()
@@ -329,25 +290,9 @@ def main() -> None:
     conditional = [("thl", r"$\theta_l$ (K)", 1), ("qt", r"$q_t$ (g kg$^{-1}$)", 1e3),
                    ("thv", r"$\theta_v$ (K)", 1), ("ql", r"$q_l$ (g kg$^{-1}$)", 1e3),
                    ("w", "w (m s$^{-1}$)", 1)]
-    # Approximate cloud/core envelopes digitized from Fig. 7 (cloud first,
-    # core second); values beyond the reliably sampled cloud layer are omitted.
-    bands7 = {
-        "thl": (([298.9, 299.2, 299.8, 300.5, 301.4, np.nan], [.10, .15, .25, .30, .30, np.nan]),
-                ([298.9, 299.2, 299.7, 300.1, 300.8, np.nan], [.10, .12, .20, .25, .25, np.nan])),
-        "qt": (([17.1, 16.6, 15.3, 14.0, 13.3, np.nan], [.2, .3, .5, .6, .4, np.nan]),
-               ([17.1, 16.7, 15.6, 14.6, 14.2, np.nan], [.2, .25, .4, .5, .35, np.nan])),
-        "thv": (([302.0, 302.0, 303.0, 304.7, 307.0, np.nan], [.1, .15, .30, .40, .35, np.nan]),
-                ([302.0, 302.0, 302.8, 304.2, 306.0, np.nan], [.1, .12, .25, .35, .35, np.nan])),
-        "ql": (([0, .20, .60, 1.0, 1.25, np.nan], [0, .12, .35, .45, .45, np.nan]),
-               ([0, .25, .80, 1.4, 2.2, np.nan], [0, .15, .35, .55, .60, np.nan])),
-        "w": (([.55, .60, .80, 1.0, 1.1, np.nan], [.10, .15, .30, .30, .35, np.nan]),
-              ([.55, .65, 1.4, 2.5, 3.4, np.nan], [.10, .15, .35, .65, .70, np.nan])),
-    }
     for ax, (name, label, factor) in zip(axs, conditional):
         group = "thermo" if name in {"thl", "qt", "thv", "ql"} else "default"
         convert = wh_to_z if name == "w" else lambda values: values
-        digitized_band(ax, reference, f"f7_{name}")
-        # The paper's gray envelopes apply to cloud/core conditional samples.
         # Retain the mean only for the first three scalar panels.
         if name not in {"ql", "w"}:
             ax.plot(factor * convert(d(group, name)), zk, color="tab:blue", label="mean")
@@ -367,9 +312,6 @@ def main() -> None:
         core_scalar, mean_scalar = co("thermo", scalar), d("thermo", scalar)
         ratios.append(safe_div(mass_flux * (core_scalar - mean_scalar), wh_to_z(flux)))
     fig, axs = plt.subplots(1, 3, figsize=(10, 4.5), sharey=True)
-    digitized_band(axs[0], reference, "f8_mass", 1.1)
-    digitized_band(axs[1], reference, "f8_ratio")
-    digitized_band(axs[2], reference, "f8_ratio")
     axs[0].plot(mass_flux, zk, color="black"); axs[0].set(xlabel=r"$M_c=\rho a_c w_c$ (kg m$^{-2}$ s$^{-1}$)")
     axs[1].plot(ratios[0], zk, color="black"); axs[1].set(xlabel=r"$M_c(q_{t,c}-\overline{q_t})/w'q_t'$")
     axs[2].plot(ratios[1], zk, color="black"); axs[2].set(xlabel=r"$M_c(\theta_{l,c}-\overline{\theta_l})/w'\theta_l'$")
