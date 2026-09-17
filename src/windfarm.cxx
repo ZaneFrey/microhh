@@ -21,6 +21,7 @@
  */
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +31,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <sys/stat.h>
 
 #include "constants.h"
 #include "fields.h"
@@ -1323,14 +1325,34 @@ void WindFarm<TF>::load_restart(const int iotime, const unsigned long itime)
 {
     if (iotime == 0)
         return;
+    char filename[64];
+    std::snprintf(filename, sizeof(filename), "windfarm_restart.%07d", iotime);
+
+    int restart_exists = 0;
+    int existence_check_ok = 1;
+    if (master.get_mpiid() == 0)
+    {
+        struct stat file_status;
+        restart_exists = stat(filename, &file_status) == 0;
+        existence_check_ok = restart_exists || errno == ENOENT;
+    }
+    master.broadcast(&existence_check_ok, 1);
+    if (!existence_check_ok)
+        throw std::runtime_error("Failed to check for wind-farm restart state");
+    master.broadcast(&restart_exists, 1);
+    if (!restart_exists)
+    {
+        master.print_message(
+                "No wind-farm restart state found; initializing wind farm at restart time\n");
+        return;
+    }
+
     std::vector<float> state(6*turbines.size());
     std::vector<signed char> flags(3*turbines.size());
     std::vector<unsigned long> times(3*turbines.size());
     int read_ok = 1;
     if (master.get_mpiid() == 0)
     {
-        char filename[64];
-        std::snprintf(filename, sizeof(filename), "windfarm_restart.%07d", iotime);
         std::ifstream file(filename, std::ios::binary);
         char magic[8];
         std::uint32_t version;
