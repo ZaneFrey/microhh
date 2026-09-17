@@ -1244,21 +1244,26 @@ void WindFarm<TF>::write_output(const Timeloop<TF>& timeloop)
         torque[n] = turbines[n].torque;
         power[n] = turbines[n].power;
     }
-    const int record = int(output_record++);
-    const std::vector<int> start = {record, 0};
-    const std::vector<int> count = {1, int(turbines.size())};
-    iter_var->insert(timeloop.get_iteration(), {record});
-    time_var->insert(TF(timeloop.get_time()), {record});
-    yaw_var->insert(yaw, start, count);
-    yaw_command_var->insert(yaw_command, start, count);
-    sensor_u_var->insert(sensor_u, start, count);
-    sensor_v_var->insert(sensor_v, start, count);
-    raw_velocity_var->insert(raw, start, count);
-    filtered_velocity_var->insert(filtered, start, count);
-    thrust_var->insert(thrust, start, count);
-    torque_var->insert(torque, start, count);
-    power_var->insert(power, start, count);
-    output_file->sync();
+    // NetCDF/HDF5 may not be thread-safe even when different files are used.
+    // Share one lock with the asynchronous statistics and column writers.
+    #pragma omp critical(microhh_netcdf_io)
+    {
+        const int record = int(output_record++);
+        const std::vector<int> start = {record, 0};
+        const std::vector<int> count = {1, int(turbines.size())};
+        iter_var->insert(timeloop.get_iteration(), {record});
+        time_var->insert(TF(timeloop.get_time()), {record});
+        yaw_var->insert(yaw, start, count);
+        yaw_command_var->insert(yaw_command, start, count);
+        sensor_u_var->insert(sensor_u, start, count);
+        sensor_v_var->insert(sensor_v, start, count);
+        raw_velocity_var->insert(raw, start, count);
+        filtered_velocity_var->insert(filtered, start, count);
+        thrust_var->insert(thrust, start, count);
+        torque_var->insert(torque, start, count);
+        power_var->insert(power, start, count);
+        output_file->sync();
+    }
 }
 
 template<typename TF>

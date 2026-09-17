@@ -521,7 +521,7 @@ void Model<TF>::exec()
                         boundary ->exec_column(*column);
                         microphys->exec_column(*column);
 
-                        #pragma omp critical
+                        #pragma omp critical(microhh_netcdf_io)
                         column   ->exec(iter, time, itime);
                     }
 
@@ -713,7 +713,7 @@ void Model<TF>::calculate_statistics(int iteration, double time, unsigned long i
 
     if (stats->do_statistics(itime))
     {
-        #pragma omp critical
+        #pragma omp critical(microhh_netcdf_io)
         stats->exec(iteration, time, itime);
     }
 }
