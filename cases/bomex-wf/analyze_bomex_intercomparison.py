@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import configparser
 from pathlib import Path
+from typing import Optional
 import warnings
 
 import matplotlib
@@ -24,13 +25,20 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from netCDF4 import Dataset
+try:
+    from netCDF4 import Dataset
+except ImportError:  # Allow post-processing on systems with only HDF5 Python bindings.
+    Dataset = None
+    import h5py
 
 
 AVG_START = 3 * 3600.0
 AVG_END = 6 * 3600.0
 KM = 1.0e-3
 G = 9.81
+RHO_REF = 1.2
+CP = 1004.0
+LV = 2.5e6
 REF_Z = np.array([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
 
 
@@ -44,6 +52,18 @@ def style() -> None:
 
 def load(path: Path) -> dict:
     """Read a grouped MicroHH statistics NetCDF file into a simple dict."""
+    if Dataset is None:
+        # NetCDF-4 files are HDF5 containers.  MicroHH's statistics files use
+        # only groups and numeric datasets, both of which h5py reads directly.
+        with h5py.File(path, "r") as nc:
+            out = {name: np.asarray(nc[name][:]) for name in ("time", "z", "zh") if name in nc}
+            for group_name, group in nc.items():
+                if not isinstance(group, h5py.Group):
+                    continue
+                for name, values in group.items():
+                    if isinstance(values, h5py.Dataset):
+                        out[f"{group_name}/{name}"] = np.asarray(values[:])
+        return out
     with Dataset(path) as nc:
         out = {name: np.asarray(nc[name][:]) for name in ("time", "z", "zh") if name in nc.variables}
         for group_name, group in nc.groups.items():
@@ -160,14 +180,20 @@ def ref_band(ax: plt.Axes, lo: np.ndarray, hi: np.ndarray, z: np.ndarray = REF_Z
                      label=label)
 
 
-def digitized_band(ax: plt.Axes, reference: np.lib.npyio.NpzFile, name: str, scale: float = 1.0) -> None:
+def digitized_band(ax: plt.Axes, reference: Optional[np.lib.npyio.NpzFile],
+                   name: str, scale: float = 1.0) -> None:
     """Draw the pixel-level envelope digitized from a supplied paper crop."""
+    if reference is None:
+        return
     z = reference[f"{name}_z"] * KM
     ax.fill_betweenx(z, reference[f"{name}_lo"] * scale, reference[f"{name}_hi"] * scale,
                      color="0.5", alpha=0.50, lw=0, zorder=0)
 
 
-def digitized_time_band(ax: plt.Axes, reference: np.lib.npyio.NpzFile, name: str, scale: float = 1.0) -> None:
+def digitized_time_band(ax: plt.Axes, reference: Optional[np.lib.npyio.NpzFile],
+                        name: str, scale: float = 1.0) -> None:
+    if reference is None:
+        return
     ax.fill_between(reference[f"{name}_x"] / 60., reference[f"{name}_lo"] * scale,
                     reference[f"{name}_hi"] * scale, color="0.5", alpha=0.50, lw=0, zorder=0)
 
@@ -200,23 +226,29 @@ def reliable_flux(total: np.ndarray, resolved: np.ndarray, name: str,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-dir", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--output-dir", type=Path,
+                        help="output directory (default: CASE_DIR/outputs)")
+    parser.add_argument("--no-envelopes", action="store_true",
+                        help="plot only this LES run, without reference envelopes")
     args = parser.parse_args()
     case = args.case_dir.resolve()
-    output = case / "outputs"
-    output.mkdir(exist_ok=True)
+    output = args.output_dir.resolve() if args.output_dir else case / "outputs"
+    output.mkdir(parents=True, exist_ok=True)
 
     default = load_restart_series(case, "bomex-wf.default")
     cloud = load_restart_series(case, "bomex-wf.ql")
     core = load_restart_series(case, "bomex-wf.qlcore")
     initial = load(case / "bomex-wf_input.nc")
-    reference_path = case / "siebesma_envelopes.npz"
-    if not reference_path.exists():
-        archived_reference = case / "old" / "spinup" / reference_path.name
-        if archived_reference.exists():
-            reference_path = archived_reference
-        else:
-            raise FileNotFoundError("Run digitize_siebesma_envelopes.py before this analysis.")
-    reference = np.load(reference_path)
+    reference = None
+    if not args.no_envelopes:
+        reference_path = case / "siebesma_envelopes.npz"
+        if not reference_path.exists():
+            archived_reference = case / "old" / "spinup" / reference_path.name
+            if archived_reference.exists():
+                reference_path = archived_reference
+            else:
+                raise FileNotFoundError("Run digitize_siebesma_envelopes.py before this analysis.")
+        reference = np.load(reference_path)
     z, zh = default["z"], default["zh"]
     zk, zhk = z * KM, zh * KM
     wh_to_z_2d = lambda values: 0.5 * (values[:, :-1] + values[:, 1:])
@@ -280,17 +312,16 @@ def main() -> None:
 
     # Figure 4 -- total turbulent fluxes.
     fig, axs = plt.subplots(1, 5, figsize=(14, 4.5), sharey=True)
-    # The paper labels scalar fluxes in W m-2.  These envelopes are converted
-    # to native cloud-statistics units using rho=1.2 kg m-3, cp=1004 J kg-1
-    # K-1, and Lv=2.5e6 J kg-1; no conversion is applied to this LES output.
+    # Match the paper's energy-flux units using rho=1.2 kg m-3,
+    # cp=1004 J kg-1 K-1, and Lv=2.5e6 J kg-1.
     ql_flux, ql_resolved_only = reliable_flux(
         d("thermo", "ql_flux"), d("thermo", "ql_w"), "ql", 1.e-2)
     thv_flux, thv_resolved_only = reliable_flux(
         d("thermo", "thv_flux"), d("thermo", "thv_w"), "thv", 10.)
-    fluxes = [(1e3*d("thermo", "qt_flux"), r"$w'q_t'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_qt", 1e3/(1.2*2.5e6), False),
-              (d("thermo", "thl_flux"), r"$w'\theta_l'$ (K m s$^{-1}$)", "f4_thl", 1/(1.2*1004.), False),
-              (1e3*ql_flux, r"$w'q_l'$ (g kg$^{-1}$ m s$^{-1}$)", "f4_ql", 1e3/(1.2*2.5e6), ql_resolved_only),
-              (thv_flux, r"$w'\theta_v'$ (K m s$^{-1}$)", "f4_thv", 1/(1.2*1004.), thv_resolved_only),
+    fluxes = [(RHO_REF*LV*d("thermo", "qt_flux"), r"$\rho L_v w'q_t'$ (W m$^{-2}$)", "f4_qt", 1, False),
+              (RHO_REF*CP*d("thermo", "thl_flux"), r"$\rho c_p w'\theta_l'$ (W m$^{-2}$)", "f4_thl", 1, False),
+              (RHO_REF*LV*ql_flux, r"$\rho L_v w'q_l'$ (W m$^{-2}$)", "f4_ql", 1, ql_resolved_only),
+              (RHO_REF*CP*thv_flux, r"$\rho c_p w'\theta_v'$ (W m$^{-2}$)", "f4_thv", 1, thv_resolved_only),
               (d("default", "u_flux"), r"$u'w'$ (m$^2$ s$^{-2}$)", "f4_uw", 1, False)]
     for index, (ax, (values, label, reference_name, scale, resolved_only)) in enumerate(zip(axs, fluxes)):
         digitized_band(ax, reference, reference_name, scale)
